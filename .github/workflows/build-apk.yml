@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: Set up Java
@@ -19,12 +19,40 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build installable debug APK
-        run: bash ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Create CI signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore nuviotv.jks \
+            -storepass 815787 \
+            -keypass 815787 \
+            -alias nuviotv \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Luma TV, OU=Android TV, O=Luma, L=El Paso, ST=Texas, C=US"
+
+      - name: Build installable TV APK
+        run: bash ./gradlew :app:assembleFullDebug --no-daemon --stacktrace
+
+      - name: Prepare universal ARM TV APK
+        run: |
+          APK=$(find app/build/outputs/apk/full/debug -type f -name '*universal*.apk' | head -n 1)
+          if [ -z "$APK" ]; then
+            APK=$(find app/build/outputs/apk/full/debug -type f -name '*.apk' | head -n 1)
+          fi
+          if [ -z "$APK" ]; then
+            echo "No APK found"
+            find app/build/outputs/apk -type f || true
+            exit 1
+          fi
+          echo "Using APK: $APK"
+          cp "$APK" Luma-TV-Android-TV.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Luma-TV-Android-TV-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: Luma-TV-Android-TV.apk
           if-no-files-found: error
           retention-days: 30
