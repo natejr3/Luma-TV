@@ -1,0 +1,26 @@
+name: Publish Luma TV preview APK
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-preview.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-luma-preview
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download successful build and publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh run download 34671332439 --name Luma-TV-Android-TV-APK --dir apk
+          test -s apk/app-debug.apk
+          mv apk/app-debug.apk apk/Luma-TV.apk
+          gh release create v0.1.0-preview apk/Luma-TV.apk --target 27417dc335d5a0999e746a243cb69802dc56432c --title "Luma TV 0.1.0 Preview" --prerelease --notes "Installable Android TV / Google TV debug APK from successful build 34671332439. Requires Android 8 or newer. Not yet device-tested on onn. 4K Pro v2. Sign in with your own Emby server credentials. This is an early preview, not a production release."
