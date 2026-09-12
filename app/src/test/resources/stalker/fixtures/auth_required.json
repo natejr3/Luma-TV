@@ -1,0 +1,66 @@
+{
+  "name": "auth_required",
+  "supported": true,
+  "gap": null,
+  "endpoints": [
+    "/portal.php",
+    "/stalker_portal/server/load.php",
+    "/server/load.php",
+    "/c/portal.php",
+    "/stb/server/load.php"
+  ],
+  "responses": [
+    {
+      "action": "handshake",
+      "body": "{\"js\":{\"token\":\"token-auth\"}}"
+    },
+    {
+      "action": "get_profile",
+      "match": {
+        "auth_second_step": "1"
+      },
+      "body": "{\"js\":{\"id\":\"3\",\"name\":\"NeedsAuth\",\"status\":0,\"auth_access\":true,\"watchdog_timeout\":120}}"
+    },
+    {
+      "action": "get_profile",
+      "match": {
+        "auth_second_step": "0"
+      },
+      "body": "{\"js\":{\"id\":\"3\",\"name\":\"NeedsAuth\",\"status\":2,\"auth_access\":true}}"
+    },
+    {
+      "action": "do_auth",
+      "body": "{\"js\":true}"
+    },
+    {
+      "action": "get_genres",
+      "body": "{\"js\":[{\"id\":\"4\",\"title\":\"Movies\"}]}"
+    }
+  ],
+  "expect": {
+    "requestOrder": [
+      "handshake",
+      "get_profile",
+      "do_auth",
+      "get_events",
+      "get_genres"
+    ],
+    "paramSequence": {
+      "action": "get_profile",
+      "param": "auth_second_step",
+      "values": [
+        "0",
+        "1"
+      ]
+    }
+  },
+  "contentRequiresActions": [
+    "do_auth"
+  ],
+  "device": {
+    "portalUrl": "https://portal.example.com/c",
+    "macAddress": "00:1A:79:DE:AD:BE",
+    "stalkerUsername": "someuser",
+    "stalkerPassword": "somepass"
+  }
+}

@@ -1,42 +1,107 @@
-# Luma TV
+<div align="center">
 
-Luma TV is a clean-room Android TV media client inspired by modern living-room interfaces. It connects directly to a user-owned Emby server, builds rich catalog rows, and plays media with Android Media3.
+  <img src="assets/brand/app_logo_wordmark.png" alt="Tuvora" width="300" />
+  <br />
+  <br />
 
-## Included in this MVP
+  [![Contributors][contributors-shield]][contributors-url]
+  [![Forks][forks-shield]][forks-url]
+  [![Stargazers][stars-shield]][stars-url]
+  [![Issues][issues-shield]][issues-url]
+  [![License][license-shield]][license-url]
 
-- Native Android TV launcher support and D-pad navigation
-- Cinematic, Apple TV-inspired home screen
-- Emby username/password authentication
-- Hardware-keystore encryption for the saved access token
-- Continue Watching, Recently Added, Trending on Your Server, Movies, TV Shows, and Favorites
-- Emby library search
-- Movie/show details
-- Lightweight Media3 player using hardware decoding and a `SurfaceView`
-- Direct Play when Emby reports it is supported; Emby's transcoding URL otherwise
-- Small player buffer tuned for fast starts without excessive memory use
+  <p>
+    A modern Android TV media player powered by the Stremio addon ecosystem.
+    <br />
+    Stremio Addon ecosystem • Android TV optimized • Playback-focused experience
+  </p>
 
-## Build on Windows
+</div>
 
-1. Install the latest stable Android Studio.
-2. Open this `LumaTV` folder as a project.
-3. Allow Android Studio to install Android SDK 35 and sync Gradle.
-4. Choose **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
-5. Install `app-debug.apk` on the Android TV with ADB or a file-manager sideload.
+## About
 
-The APK is normally generated at `app/build/outputs/apk/debug/app-debug.apk`.
+Tuvora TV is a modern media player designed specifically for Android TV.
 
-## Connect
+It acts as a client-side playback interface that can integrate with the Stremio addon ecosystem for content discovery and source resolution through user-installed extensions.
 
-On first launch, enter the complete Emby address and your Emby username/password. Examples:
+Built with Kotlin and optimized for a TV-first viewing experience.
 
-- Home network: `http://192.168.1.50:8096`
-- Remote HTTPS: `https://media.example.com`
+Tuvora is built on Nuvio by NuvioMedia.
 
-The password is only used during authentication and is not saved. The returned Emby token is encrypted with the Android Keystore.
+## Installation
 
-## Notes
+### Android TV
 
-- “Trending on Your Server” is based on the Emby library's play count. This keeps the app independent of third-party API keys.
-- Cleartext HTTP is enabled because many home Emby installations use LAN HTTP. Use HTTPS for any server exposed outside the home.
-- This is original source code. It does not contain Strand code, branding, assets, or reverse-engineered components.
-- The current UI treats series as detail items. A production follow-up should add season and episode browsing, profile selection, audio/subtitle selection, watch-progress reporting, live TV, and optional TMDB/Trakt integrations.
+Download the latest APK from [GitHub Releases](https://github.com/tapframe/NuvioTV/releases/latest) and install on your Android TV device.
+
+## Development
+
+### Prerequisites
+
+- Android Studio (latest version)
+- JDK 11+
+- Android SDK (API 29+)
+- Gradle 8.0+
+
+### Setup
+
+```bash
+git clone https://github.com/tapframe/NuvioTV.git
+cd NuvioTV
+```
+
+### Full Debug Build
+
+```bash
+./gradlew :app:compileFullDebugKotlin
+./gradlew :app:assembleFullDebug
+```
+
+### Running on Emulator or Device
+
+```bash
+# Full debug build
+./gradlew :app:assembleFullDebug
+
+# Run on connected device
+adb shell am start -n com.nuviodebug.com/com.nuvio.tv.MainActivity
+```
+
+## Legal & DMCA
+
+Tuvora functions solely as a client-side interface for browsing metadata and playing media provided by user-installed extensions and/or user-provided sources. It is intended for content the user owns or is otherwise authorized to access.
+
+Tuvora is not affiliated with any third-party extensions or content providers. It does not host, store, or distribute any media content.
+
+For comprehensive legal information, including our full disclaimer, third-party extension policy, and DMCA/Copyright information, please visit our **[Legal & Disclaimer Page](https://nuvioapp.space/legal)**.
+
+## Built With
+
+* Kotlin
+* Jetpack Compose & TV Material3
+* ExoPlayer / Media3
+* Hilt (Dependency Injection)
+* Retrofit (Networking)
+* Gradle
+
+## Star History
+
+<a href="https://www.star-history.com/#tapframe/NuvioTV&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&legend=top-left" />
+ </picture>
+</a>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[contributors-shield]: https://img.shields.io/github/contributors/tapframe/NuvioTV.svg?style=for-the-badge
+[contributors-url]: https://github.com/tapframe/NuvioTV/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/tapframe/NuvioTV.svg?style=for-the-badge
+[forks-url]: https://github.com/tapframe/NuvioTV/network/members
+[stars-shield]: https://img.shields.io/github/stars/tapframe/NuvioTV.svg?style=for-the-badge
+[stars-url]: https://github.com/tapframe/NuvioTV/stargazers
+[issues-shield]: https://img.shields.io/github/issues/tapframe/NuvioTV.svg?style=for-the-badge
+[issues-url]: https://github.com/tapframe/NuvioTV/issues
+[license-shield]: https://img.shields.io/github/license/tapframe/NuvioTV.svg?style=for-the-badge
+[license-url]: http://www.gnu.org/licenses/gpl-3.0.en.html

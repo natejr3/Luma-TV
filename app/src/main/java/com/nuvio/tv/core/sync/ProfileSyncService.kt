@@ -1,0 +1,269 @@
+package com.nuvio.tv.core.sync
+
+import android.util.Log
+import com.nuvio.tv.core.auth.AuthManager
+import com.nuvio.tv.core.profile.ProfileManager
+import com.nuvio.tv.data.local.ProfileDataStore
+import com.nuvio.tv.data.remote.supabase.SupabaseProfileLockState
+import com.nuvio.tv.data.remote.supabase.SupabaseProfile
+import com.nuvio.tv.data.remote.supabase.SupabaseProfilePinVerifyResult
+import com.nuvio.tv.domain.model.UserProfile
+import io.github.jan.supabase.postgrest.Postgrest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import javax.inject.Inject
+import javax.inject.Singleton
+
+private const val TAG = "ProfileSyncService"
+
+sealed class SetProfilePinResult {
+    object Success : SetProfilePinResult()
+    object CurrentPinRequired : SetProfilePinResult()
+    data class Failure(val throwable: Throwable) : SetProfilePinResult()
+}
+
+@Singleton
+class ProfileSyncService @Inject constructor(
+    private val authManager: AuthManager,
+    private val postgrest: Postgrest,
+    private val profileDataStore: ProfileDataStore,
+    private val profileManager: ProfileManager,
+    private val syncClientIdentity: SyncClientIdentity
+) {
+    private suspend fun <T> withJwtRefreshRetry(block: suspend () -> T): T {
+        return try {
+            block()
+        } catch (e: Exception) {
+            if (!authManager.refreshSessionIfJwtExpired(e)) throw e
+            block()
+        }
+    }
+
+    suspend fun pushToRemote(): Result<Unit> = withContext(Dispatchers.IO) {
+        // Profile create/update/delete works signed out (ProfileManager has already written the
+        // change locally by the time we get here), so without this the RPC goes out as `anon` and
+        // comes back 42501 on every profile edit. KMP twin: ProfileRepository.pushProfiles().
+        if (!authManager.canSync) {
+            Log.d(TAG, "pushToRemote: skipped, not signed in")
+            return@withContext Result.failure(SyncNotAuthenticatedException())
+        }
+        try {
+            val profiles = profileManager.profiles.value
+
+            val params = buildJsonObject {
+                put("p_client_max_profiles", ProfileManager.MAX_PROFILES)
+                put("p_profiles", buildJsonArray {
+                    profiles.forEach { profile ->
+                        addJsonObject {
+                            put("profile_index", profile.id)
+                            put("name", profile.name)
+                            put("avatar_color_hex", profile.avatarColorHex)
+                            put("uses_primary_addons", profile.usesPrimaryAddons)
+                            put("uses_primary_plugins", profile.usesPrimaryPlugins)
+                            put("avatar_id", if (profile.avatarUrl.isNullOrBlank()) profile.avatarId else null)
+                            put("avatar_url", profile.avatarUrl?.takeIf { it.isNotBlank() })
+                            put("profile_background_id", profile.profileBackgroundId)
+                            put("profile_background_url", profile.profileBackgroundUrl?.takeIf { it.isNotBlank() })
+                        }
+                    }
+                })
+                putSyncOriginClientId(syncClientIdentity)
+            }
+            withJwtRefreshRetry {
+                postgrest.rpc("sync_push_profiles", params)
+            }
+
+            Log.d(TAG, "Pushed ${profiles.size} profiles to remote")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to push profiles to remote", e)
+            Result.failure(e)
+        }
+    }
+
+    // `force` accepted for upstream call-site compatibility; the fork always pulls (no freshness cache).
+    suspend fun pullFromRemote(force: Boolean = false): Result<List<UserProfile>> = withContext(Dispatchers.IO) {
+        // Without a live session this RPC goes out as `anon` and comes back
+        // `42501 permission denied for function sync_pull_profiles` — one of the launch-trio
+        // errors measured on the backend (report_device / get_sync_owner / sync_pull_profiles).
+        // AuthState.FullAccount deliberately survives a lapsed session, so callers reaching here
+        // is normal; the failed Result keeps every caller on its existing "pull failed" path.
+        if (!authManager.canSync) {
+            return@withContext Result.failure(SyncNotAuthenticatedException())
+        }
+        try {
+            val response = withJwtRefreshRetry {
+                postgrest.rpc("sync_pull_profiles")
+            }
+            val remote = response.decodeList<SupabaseProfile>()
+
+            Log.d(TAG, "pullFromRemote: fetched ${remote.size} profiles from Supabase")
+
+            val profiles = remote.map { entry ->
+                UserProfile(
+                    id = entry.profileIndex,
+                    name = entry.name,
+                    avatarColorHex = entry.avatarColorHex,
+                    usesPrimaryAddons = entry.usesPrimaryAddons,
+                    usesPrimaryPlugins = entry.usesPrimaryPlugins,
+                    avatarId = entry.avatarId,
+                    avatarUrl = entry.avatarUrl,
+                    profileBackgroundId = entry.profileBackgroundId,
+                    profileBackgroundUrl = entry.profileBackgroundUrl
+                )
+            }
+
+            if (profiles.isNotEmpty()) {
+                profileDataStore.replaceAllProfiles(profiles)
+                Log.d(TAG, "Merged ${profiles.size} remote profiles into local store")
+            }
+
+            Result.success(profiles)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to pull profiles from remote", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteProfileData(profileId: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        // Same as pushToRemote: deleteProfile() removes the profile locally first, and there is
+        // no remote data to delete for a session-less client.
+        if (!authManager.canSync) {
+            Log.d(TAG, "deleteProfileData: skipped, not signed in")
+            return@withContext Result.failure(SyncNotAuthenticatedException())
+        }
+        try {
+            val params = buildJsonObject {
+                put("p_profile_id", profileId)
+                putSyncOriginClientId(syncClientIdentity)
+            }
+            withJwtRefreshRetry {
+                postgrest.rpc("sync_delete_profile_data", params)
+            }
+
+            Log.d(TAG, "Deleted remote data for profile $profileId")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete remote profile data for profile $profileId", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Exchange every per-profile row between two profiles, for "make this my main profile".
+     *
+     * Runs BEFORE the local swap: if the server rejects it, the device is still consistent with
+     * the account. A session-less client has no remote rows, so the local swap alone is correct.
+     */
+    suspend fun swapProfileData(a: Int, b: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!authManager.canSync) {
+            Log.d(TAG, "swapProfileData: skipped, not signed in")
+            return@withContext Result.failure(SyncNotAuthenticatedException())
+        }
+        try {
+            val params = buildJsonObject {
+                put("p_a", a)
+                put("p_b", b)
+                putSyncOriginClientId(syncClientIdentity)
+            }
+            withJwtRefreshRetry {
+                postgrest.rpc("sync_swap_profile_index", params)
+            }
+            Log.d(TAG, "Swapped remote data for profiles $a and $b")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to swap remote profile data for $a and $b", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun pullProfileLockStates(): Result<Map<Int, Boolean>> = withContext(Dispatchers.IO) {
+        // Biggest single 42501 source on the backend: this leaf ran ungated, so a lapsed/anon
+        // session sent sync_pull_profile_locks as `anon` and collected a permission-denied every
+        // profile-selection open. AuthState.FullAccount deliberately survives a lapsed session, so
+        // reaching here without a usable token is normal; the failed Result keeps every caller
+        // (MainActivity, ProfileSelectionViewModel) on its existing "pull failed" path.
+        if (!authManager.canSync) {
+            return@withContext Result.failure(SyncNotAuthenticatedException())
+        }
+        try {
+            val response = withJwtRefreshRetry {
+                postgrest.rpc("sync_pull_profile_locks")
+            }
+            val remote = response.decodeList<SupabaseProfileLockState>()
+            val result = remote.associate { it.profileIndex to it.pinEnabled }
+            Result.success(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to pull profile lock states", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setProfilePin(profileId: Int, pin: String, currentPin: String? = null): SetProfilePinResult = withContext(Dispatchers.IO) {
+        try {
+            val params = buildJsonObject {
+                put("p_profile_id", profileId)
+                put("p_pin", pin)
+                if (!currentPin.isNullOrBlank()) {
+                    put("p_current_pin", currentPin)
+                }
+            }
+            withJwtRefreshRetry {
+                postgrest.rpc("set_profile_pin", params)
+            }
+            SetProfilePinResult.Success
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set profile PIN", e)
+            if (isCurrentPinRequiredError(e)) {
+                SetProfilePinResult.CurrentPinRequired
+            } else {
+                SetProfilePinResult.Failure(e)
+            }
+        }
+    }
+
+    private fun isCurrentPinRequiredError(e: Throwable): Boolean =
+        e.message?.contains("Current PIN is required", ignoreCase = true) == true
+
+    suspend fun clearProfilePin(profileId: Int, currentPin: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val params = buildJsonObject {
+                put("p_profile_id", profileId)
+                if (!currentPin.isNullOrBlank()) {
+                    put("p_current_pin", currentPin)
+                }
+            }
+            withJwtRefreshRetry {
+                postgrest.rpc("clear_profile_pin", params)
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to clear profile PIN", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyProfilePin(profileId: Int, pin: String): Result<SupabaseProfilePinVerifyResult> = withContext(Dispatchers.IO) {
+        try {
+            val params = buildJsonObject {
+                put("p_profile_id", profileId)
+                put("p_pin", pin)
+            }
+            val response = withJwtRefreshRetry {
+                postgrest.rpc("verify_profile_pin", params)
+            }
+            // verify_profile_pin returns a single JSON OBJECT ({"unlocked":..,"retry_after_seconds":..}),
+            // not an array. decodeList (supabase-kt 3.6.0) deserializes the body as a List and throws on
+            // an object, turning every verify — right PIN or wrong — into Result.failure. Decode the object.
+            val decoded = response.decodeAs<SupabaseProfilePinVerifyResult>()
+            Result.success(decoded)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to verify profile PIN", e)
+            Result.failure(e)
+        }
+    }
+}

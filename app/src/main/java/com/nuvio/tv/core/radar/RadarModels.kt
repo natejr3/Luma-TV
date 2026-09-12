@@ -1,0 +1,404 @@
+package com.nuvio.tv.core.radar
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * Sports Centre (Radar) domain models. The catalog comes from [RadarCatalogData]; fixtures
+ * come from our radar-fixtures Supabase edge function (TheSportsDB proxy + cache). KMP twin
+ * of NuvioTV's core/radar models.
+ */
+
+// --- Catalog (bundled, curated) ----------------------------------------------
+
+@Serializable
+data class RadarCatalog(
+    val version: Int = 1,
+    val categories: List<RadarCategory> = emptyList(),
+    val featured: List<RadarFeaturedEvent> = emptyList(),
+)
+
+/** What the league-discovery mode returns. Same league shape as the catalog, plus a country. */
+@Serializable
+data class RadarLeagueSearchResponse(
+    val leagues: List<RadarLeague> = emptyList(),
+)
+
+/** What the team-discovery mode returns. */
+@Serializable
+data class RadarTeamSearchResponse(
+    val teams: List<RadarTeam> = emptyList(),
+)
+
+/**
+ * A club, from the team-search endpoint. There is no published team catalog to look one up
+ * in, so unlike [RadarLeague] every field a followed team needs travels with it here.
+ */
+@Serializable
+data class RadarTeam(
+    val id: String,
+    val name: String,
+    val sport: String? = null,
+    val country: String? = null,
+    val badge: String? = null,
+    /** The club's own league — display context, and how lookalike names are told apart. */
+    val leagueId: String? = null,
+    val league: String? = null,
+    /** Channel-matching keywords ("arsenal", "afc") — data, not code. */
+    val keywords: List<String> = emptyList(),
+)
+
+/** What `radar-fixtures?catalog=1` returns. [payload] is null before the first publish. */
+@Serializable
+data class RadarCatalogEnvelope(
+    val version: Int = 0,
+    val payload: RadarCatalog? = null,
+    val updatedAt: String? = null,
+)
+
+/** Last good remote catalog, kept so a cold start doesn't wait on the network. */
+@Serializable
+data class RadarCachedCatalog(
+    val version: Int,
+    val catalog: RadarCatalog,
+    val fetchedAtMs: Long,
+)
+
+/**
+ * Whether a catalog is worth adopting over the one already in hand.
+ *
+ * The bundled copy is always a valid fallback, so the bar for replacing it is that the
+ * remote document actually looks like a catalog. Mirrors the gate in
+ * nuvio-backend/tools/radar-catalog/publish_catalog.py — an empty or truncated publish
+ * degrades to the bundled leagues instead of emptying the Sports tab.
+ */
+internal fun RadarCatalog.isUsable(): Boolean =
+    categories.size >= MIN_CATALOG_CATEGORIES &&
+        categories.sumOf { it.leagues.size } >= MIN_CATALOG_LEAGUES
+
+private const val MIN_CATALOG_CATEGORIES = 3
+private const val MIN_CATALOG_LEAGUES = 10
+
+@Serializable
+data class RadarCategory(
+    val name: String,
+    val icon: String = "",
+    val leagues: List<RadarLeague> = emptyList(),
+)
+
+@Serializable
+data class RadarLeague(
+    val id: String,
+    val name: String,
+    val sport: String? = null,
+    val badge: String? = null,
+    val banner: String? = null,
+    /** Channel-matching keywords ("premier league", "epl", …) — data, not code. */
+    val keywords: List<String> = emptyList(),
+)
+
+@Serializable
+data class RadarFeaturedEvent(
+    val id: String,
+    val title: String,
+    val leagueId: String,
+    /** Inclusive date window, "YYYY-MM-DD" (UTC days). */
+    val from: String,
+    val to: String,
+    val banner: String? = null,
+    val badge: String? = null,
+    val sport: String? = null,
+) {
+    fun isActive(nowMs: Long): Boolean {
+        val fromMs = radarDateToEpochMs(from) ?: return false
+        val toMs = radarDateToEpochMs(to)?.plus(DAY_MS) ?: return false
+        return nowMs in fromMs until toMs
+    }
+}
+
+// --- Fixtures (from the radar-fixtures edge function) -------------------------
+
+@Serializable
+data class RadarFixture(
+    val id: String? = null,
+    val leagueId: String? = null,
+    val league: String? = null,
+    val sport: String? = null,
+    val home: String? = null,
+    val away: String? = null,
+    /** Full event name — the display fallback when home/away are absent (motorsport, golf…). */
+    val event: String? = null,
+    val homeBadge: String? = null,
+    val awayBadge: String? = null,
+    val leagueBadge: String? = null,
+    /** "2026-07-02T14:00:00" (UTC, TheSportsDB strTimestamp). */
+    val ts: String? = null,
+    val round: String? = null,
+    val venue: String? = null,
+    val status: String? = null,
+    val postponed: String? = null,
+    val homeScore: String? = null,
+    val awayScore: String? = null,
+    /** Wide event artwork (TheSportsDB strBanner) for the spotlight hero backdrop; strThumb fallback. */
+    val banner: String? = null,
+    val thumb: String? = null,
+    /** The competition's home country (TheSportsDB strCountry) — ranks the home broadcaster on top. */
+    val country: String? = null,
+) {
+    val startEpochMs: Long? get() = radarTimestampToEpochMs(ts)
+
+    /** The best available backdrop image for the spotlight hero — wide banner, else the event thumb. */
+    val heroImage: String?
+        get() = banner?.takeIf { it.isNotBlank() } ?: thumb?.takeIf { it.isNotBlank() }
+
+    val displayTitle: String
+        get() = when {
+            !home.isNullOrBlank() && !away.isNullOrBlank() -> "$home  v  $away"
+            !event.isNullOrBlank() -> event
+            else -> league ?: ""
+        }
+
+    /** "Round of 32" style label from TheSportsDB's intRound conventions, or null. */
+    val roundLabel: String?
+        get() = when (round?.trim()) {
+            null, "", "0" -> null
+            "125" -> "Quarter-final"
+            "150" -> "Semi-final"
+            "160" -> "Third place"
+            "200" -> "Final"
+            "500" -> "Play-off"
+            else -> "Round $round"
+        }
+
+    /** "2 – 1" when the API has a result for this fixture (finished/in-play), else null. */
+    val scoreLabel: String?
+        get() = if (!homeScore.isNullOrBlank() && !awayScore.isNullOrBlank()) "$homeScore – $awayScore" else null
+
+    /**
+     * In its live window? Kick-off reached and a sport-typical duration not yet elapsed.
+     * The livescore feed overrides this for the sports it covers (soccer, NFL, NBA, MLB, NHL).
+     */
+    fun inferredLive(nowMs: Long): Boolean {
+        if (postponed == "yes") return false
+        val start = startEpochMs ?: return false
+        return nowMs >= start && nowMs < start + typicalDurationMs(sport)
+    }
+
+    /**
+     * A finished / postponed / cancelled fixture is never live, however stale the livescore feed's
+     * live set is. Reads the TheSportsDB `strStatus` the live-badge logic previously ignored — the
+     * root of finished games (a Sunday NFL game on Monday) reading "LIVE" (robustness inventory
+     * T1/BK1/#4). Conservative: only known terminal statuses match; anything else falls through to
+     * the window/feed logic, with [maxLiveWindowMs] as the backstop.
+     */
+    val isFinishedOrOff: Boolean
+        get() {
+            if (postponed == "yes") return true
+            val s = status?.trim()?.lowercase()?.replace('_', ' ') ?: return false
+            if (s.isEmpty()) return false
+            return s in FINISHED_STATUSES ||
+                s.contains("finish") || s.contains("full time") || s.contains("full-time") ||
+                s.startsWith("final") || s.contains("ended")
+        }
+
+    /**
+     * The longest a fixture of this sport can plausibly still be live — its typical duration plus a
+     * grace for overruns / OT / delays. A hard cap so a stale live-set entry (the feed served past
+     * its TTL, or a finished row it never dropped) can never read LIVE forever, even for a
+     * feed-covered sport.
+     */
+    fun maxLiveWindowMs(): Long = typicalDurationMs(sport) + LIVE_WINDOW_GRACE_MS
+}
+
+/** TheSportsDB `strStatus` values (normalised: trimmed, lower-cased, `_`→space) that mean the
+ *  fixture is over. Anything not here falls through to the window/feed logic. */
+private val FINISHED_STATUSES = setOf(
+    "match finished", "finished", "game finished", "ft", "aet", "pen", "ft pen", "aot",
+    "final", "final ot", "ended", "cancelled", "canceled", "postponed", "abandoned",
+    "awarded", "walkover", "wo",
+)
+
+/** Grace on top of a sport's typical duration before a fixture is force-expired from LIVE. */
+private const val LIVE_WINDOW_GRACE_MS = 2L * 60 * 60 * 1000
+
+@Serializable
+data class RadarLiveScore(
+    val eventId: String? = null,
+    val status: String? = null,
+    val progress: String? = null,
+    val homeScore: String? = null,
+    val awayScore: String? = null,
+)
+
+/** One broadcaster listing for an event (TheSportsDB lookuptv via the edge function). */
+@Serializable
+data class RadarTvStation(
+    val country: String? = null,
+    val channel: String? = null,
+)
+
+@Serializable
+data class RadarFixturesResponse(
+    val fixtures: Map<String, List<RadarFixture>> = emptyMap(),
+    val livescore: Map<String, List<RadarLiveScore>> = emptyMap(),
+    /** eventId → broadcasters; present only when tv_event_ids was requested. */
+    val tv: Map<String, List<RadarTvStation>> = emptyMap(),
+    /** teamId → that club's own schedule; present only when team_ids was requested. */
+    val teamFixtures: Map<String, List<RadarFixture>> = emptyMap(),
+    val fetchedAt: String? = null,
+)
+
+// --- Follows + prefs (persisted, synced) --------------------------------------
+
+@Serializable
+data class RadarFollow(
+    @SerialName("league_id") val leagueId: String,
+    val sport: String = "",
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    /**
+     * Display + matching metadata, carried ONLY for leagues the user added themselves.
+     *
+     * A catalog league deliberately leaves these null so the catalog stays the single source
+     * of truth — a badge fix or a keyword tweak then reaches everyone without rewriting
+     * anybody's follow rows. A user-added league isn't in the catalog at all, so without
+     * these there'd be nothing to name it, draw it, or match it to a channel with.
+     */
+    val name: String? = null,
+    val badge: String? = null,
+    val banner: String? = null,
+    val keywords: List<String> = emptyList(),
+    val custom: Boolean = false,
+)
+
+/** A user-added follow rendered as a league. Null for catalog follows — look those up instead. */
+fun RadarFollow.asLeague(): RadarLeague? =
+    if (!custom || name.isNullOrBlank()) null
+    else RadarLeague(
+        id = leagueId,
+        name = name,
+        sport = sport.ifBlank { null },
+        badge = badge,
+        banner = banner,
+        keywords = keywords,
+    )
+
+/** Opt-in state values mirror the backend enum-ish text column. */
+object RadarOptIn {
+    const val UNSET = "unset"
+    const val ACCEPTED = "accepted"
+    const val DECLINED = "declined"
+}
+
+@Serializable
+data class RadarPrefs(
+    @SerialName("featured_event_id") val featuredEventId: String = "",
+    @SerialName("opt_in_state") val optInState: String = RadarOptIn.UNSET,
+    @SerialName("promo_dismissed") val promoDismissed: Boolean = false,
+)
+
+/** The one locally-persisted blob (follows + prefs together; fixtures cache is separate). */
+@Serializable
+data class RadarLocalState(
+    val follows: List<RadarFollow> = emptyList(),
+    val prefs: RadarPrefs = RadarPrefs(),
+    val teams: List<RadarTeamFollow> = emptyList(),
+)
+
+/**
+ * A followed club.
+ *
+ * Always carries its own display + matching metadata, because there is no team catalog to
+ * resolve an id against — the opposite of [RadarFollow], where a catalog league deliberately
+ * leaves those null so the catalog stays the single source of truth.
+ */
+@Serializable
+data class RadarTeamFollow(
+    @SerialName("team_id") val teamId: String,
+    val name: String = "",
+    val sport: String = "",
+    val badge: String? = null,
+    @SerialName("league_id") val leagueId: String? = null,
+    val league: String? = null,
+    val keywords: List<String> = emptyList(),
+    @SerialName("sort_order") val sortOrder: Int = 0,
+)
+
+fun RadarTeam.asFollow(sortOrder: Int): RadarTeamFollow = RadarTeamFollow(
+    teamId = id,
+    name = name,
+    sport = sport.orEmpty(),
+    badge = badge,
+    leagueId = leagueId,
+    league = league,
+    keywords = keywords,
+    sortOrder = sortOrder,
+)
+
+fun RadarTeamFollow.asTeam(): RadarTeam = RadarTeam(
+    id = teamId,
+    name = name,
+    sport = sport.ifBlank { null },
+    badge = badge,
+    leagueId = leagueId,
+    league = league,
+    keywords = keywords,
+)
+
+// --- Time helpers (no kotlinx-datetime dependency; UTC civil-date math) --------
+
+internal const val DAY_MS: Long = 24 * 60 * 60 * 1000L
+
+/** Sports the TheSportsDB v2 livescore endpoint covers — everything else infers from time. */
+val RADAR_LIVESCORE_SPORTS: Set<String> =
+    setOf("soccer", "american football", "basketball", "baseball", "ice hockey")
+
+private fun typicalDurationMs(sport: String?): Long {
+    val hours = when (sport?.lowercase()) {
+        "soccer" -> 2.5
+        "basketball" -> 3.0
+        "american football" -> 4.0
+        "baseball" -> 4.0
+        "ice hockey" -> 3.0
+        "motorsport" -> 4.0
+        "fighting" -> 6.0
+        "rugby" -> 2.5
+        "australian football" -> 3.0
+        "cricket" -> 9.0
+        // Day-long tournament sports: "live" most of the day is the honest answer.
+        "tennis", "golf", "cycling" -> 10.0
+        else -> 3.0
+    }
+    return (hours * 60 * 60 * 1000).toLong()
+}
+
+/** "YYYY-MM-DD" -> epoch ms at 00:00 UTC, or null. */
+internal fun radarDateToEpochMs(date: String?): Long? {
+    val parts = date?.trim()?.split("-") ?: return null
+    if (parts.size != 3) return null
+    val y = parts[0].toIntOrNull() ?: return null
+    val m = parts[1].toIntOrNull() ?: return null
+    val d = parts[2].toIntOrNull() ?: return null
+    return daysFromCivil(y, m, d) * DAY_MS
+}
+
+/** "2026-07-02T14:00:00" or "2026-07-02 14:00:00" (UTC) -> epoch ms, or null. */
+internal fun radarTimestampToEpochMs(ts: String?): Long? {
+    val t = ts?.trim()?.replace(' ', 'T') ?: return null
+    val dateAndTime = t.split("T")
+    val dayMs = radarDateToEpochMs(dateAndTime.getOrNull(0)) ?: return null
+    val hms = dateAndTime.getOrNull(1)?.removeSuffix("Z")?.split(":") ?: return dayMs
+    val h = hms.getOrNull(0)?.toIntOrNull() ?: 0
+    val min = hms.getOrNull(1)?.toIntOrNull() ?: 0
+    val s = hms.getOrNull(2)?.substringBefore('.')?.toIntOrNull() ?: 0
+    return dayMs + ((h * 60L + min) * 60L + s) * 1000L
+}
+
+/** Howard Hinnant's days-from-civil: civil UTC date -> days since 1970-01-01. */
+private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
+    val y = if (month <= 2) year - 1 else year
+    val era = (if (y >= 0) y else y - 399) / 400
+    val yoe = y - era * 400
+    val doy = (153 * (if (month > 2) month - 3 else month + 9) + 2) / 5 + day - 1
+    val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097L + doe - 719468L
+}

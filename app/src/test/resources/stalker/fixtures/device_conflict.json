@@ -1,0 +1,31 @@
+{
+  "name": "device_conflict",
+  "supported": true,
+  "gap": null,
+  "endpoints": [
+    "/portal.php",
+    "/stalker_portal/server/load.php",
+    "/server/load.php",
+    "/c/portal.php",
+    "/stb/server/load.php"
+  ],
+  "responses": [
+    {
+      "action": "handshake",
+      "body": "{\"js\":{\"token\":\"token-conflict\"}}"
+    },
+    {
+      "action": "get_profile",
+      "body": "{\"js\":{\"status\":1,\"msg\":\"Device ID mismatch\"}}"
+    }
+  ],
+  "expect": {
+    "requestOrder": [
+      "handshake",
+      "get_profile"
+    ],
+    "authSucceeds": false,
+    "errorType": "StalkerDeviceConflictException",
+    "errorContains": "nother device"
+  }
+}

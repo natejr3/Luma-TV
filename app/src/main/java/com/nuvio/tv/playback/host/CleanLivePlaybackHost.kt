@@ -1,0 +1,337 @@
+package com.nuvio.tv.playback.host
+
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.os.Looper
+import com.nuvio.tv.playback.core.ContentType
+import com.nuvio.tv.playback.core.PlaybackLifecyclePort
+import com.nuvio.tv.playback.core.PlaybackOutputController
+import com.nuvio.tv.playback.core.PlaybackProfileId
+import com.nuvio.tv.playback.core.PlaybackRequest
+import com.nuvio.tv.playback.core.PlaybackTrackId
+import com.nuvio.tv.playback.core.ExternalSubtitleId
+import com.nuvio.tv.playback.core.ExternalSubtitleResolver
+import com.nuvio.tv.playback.core.PlaybackSnapshot
+import com.nuvio.tv.playback.core.PlaybackState
+import com.nuvio.tv.playback.core.ProviderPlaybackSelection
+import com.nuvio.tv.playback.core.ResourceBudget
+import com.nuvio.tv.playback.core.SessionProfile
+import com.nuvio.tv.playback.core.VideoDimensions
+import com.nuvio.tv.playback.mediasession.CleanMediaSessionMetadata
+import com.nuvio.tv.playback.mediasession.CleanMediaSessionOwner
+import com.nuvio.tv.playback.ui.PlaybackSessionController
+import com.nuvio.tv.playback.wiring.ProductionPlaybackHost
+import com.nuvio.tv.playback.wiring.ProductionPlaybackSessionFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+internal fun interface CleanMediaSessionOwnerFactory {
+    fun create(
+        context: Context,
+        applicationLooper: Looper,
+        parentScope: CoroutineScope,
+        controller: PlaybackSessionController,
+        metadata: CleanMediaSessionMetadata,
+    ): CleanMediaSessionOwner
+}
+
+/**
+ * Content-neutral TV playback host internals: one child scope, one controller, one surface
+ * coordinator, and one release authority. Live and VOD wrappers enforce their own ingress rules.
+ */
+internal class CleanLivePlaybackHost private constructor(
+    private val hostJob: Job,
+    private val controller: PlaybackSessionController,
+    private val surfaces: CleanLiveSurfaceCoordinator,
+    private val releaseAuthority: ReleaseAuthority,
+) {
+    private val commandMutex = Mutex()
+
+    @Volatile
+    private var released = false
+
+    @Volatile
+    private var releaseStarted = false
+
+    // Presentation is derived by the consuming ViewModels via LivePlaybackUiPresenter; a
+    // host-owned eager StateFlow re-presenting every snapshot had no production reader and kept
+    // a collector alive for the life of every host.
+    val snapshot: StateFlow<PlaybackSnapshot> = controller.snapshot
+
+    suspend fun tune(
+        selection: ProviderPlaybackSelection,
+        profile: SessionProfile,
+        metadata: CleanMediaSessionMetadata,
+    ): Long = acceptLiveCommand(selection, metadata) {
+        controller.tune(selection, profile)
+    }
+
+    suspend fun zap(
+        selection: ProviderPlaybackSelection,
+        profile: SessionProfile,
+        metadata: CleanMediaSessionMetadata,
+    ): Long = acceptLiveCommand(selection, metadata) {
+        controller.zap(selection, profile)
+    }
+
+    suspend fun tuneVod(
+        request: PlaybackRequest,
+        profile: SessionProfile,
+        startPositionMs: Long,
+        metadata: CleanMediaSessionMetadata,
+    ): Long = acceptCommand(metadata) {
+        require(request.contentType == ContentType.VOD) {
+            "Clean VOD playback host accepts VOD requests only"
+        }
+        controller.tune(request, profile, startPositionMs)
+    }
+
+    suspend fun pause() = withActiveHost(controller::pause)
+    suspend fun resume() = withActiveHost(controller::resume)
+    suspend fun retry() {
+        withActiveHost {
+            val prior = snapshot.value
+            val restarts = prior.state == PlaybackState.FAILED || prior.state == PlaybackState.STOPPED
+            withContext(NonCancellable) {
+                controller.retry()
+                if (restarts) {
+                    // Retry restarts the request and bumps the generation. Awaiting that bump
+                    // under the same command mutex means acceptCommand's `first { generation >
+                    // prior }` can only ever observe its own command's bump — a queued retry can
+                    // no longer donate its generation to the tune/zap dispatched after it. The
+                    // reducer restarts only from FAILED/STOPPED, so this wait matches its gate.
+                    snapshot.first { it.generation > prior.generation }
+                }
+            }
+        }
+    }
+    suspend fun seekTo(positionMs: Long) = withActiveHost { controller.seekTo(positionMs) }
+    suspend fun setPlaybackRate(rate: Float) = withActiveHost { controller.setPlaybackRate(rate) }
+    suspend fun selectAudioTrack(trackId: PlaybackTrackId) = withActiveHost {
+        controller.selectAudioTrack(trackId)
+    }
+    suspend fun selectSubtitleTrack(trackId: PlaybackTrackId) = withActiveHost {
+        controller.selectSubtitleTrack(trackId)
+    }
+    suspend fun disableSubtitles() = withActiveHost(controller::disableSubtitles)
+    suspend fun attachExternalSubtitle(subtitleId: ExternalSubtitleId) = withActiveHost {
+        controller.attachExternalSubtitle(subtitleId)
+    }
+    suspend fun changeProfile(profile: SessionProfile) = withActiveHost {
+        controller.changeProfile(profile)
+    }
+    suspend fun stop() = withActiveHost(controller::stop)
+
+    /**
+     * The selected authority first waits for the affirmative session/provider barrier. Only then
+     * may the coordinator remove its child and the per-host scope be cancelled.
+     */
+    suspend fun release() = withContext(NonCancellable) {
+        commandMutex.withLock {
+            if (released) return@withLock
+            releaseStarted = true
+            releaseAuthority.release()
+            check(surfaces.disposeAfterSessionRelease()) {
+                "Clean playback surfaces still have an attached lease after session release"
+            }
+            released = true
+            hostJob.cancel()
+        }
+    }
+
+    private suspend fun <T> withActiveHost(block: suspend () -> T): T = commandMutex.withLock {
+        check(!releaseStarted) { "Clean live playback host is releasing or released" }
+        block()
+    }
+
+    /**
+     * Returns the generation assigned by the session, rather than guessing that a queued command
+     * has already become current. Dispatch and MediaSession metadata form one accepted-command
+     * section. Once dispatch is accepted, cancellation cannot split metadata/cursor correlation or
+     * abandon the short generation acknowledgement wait.
+     */
+    private suspend fun acceptLiveCommand(
+        selection: ProviderPlaybackSelection,
+        metadata: CleanMediaSessionMetadata,
+        dispatch: suspend () -> Unit,
+    ): Long {
+        requireLive(selection)
+        return acceptCommand(metadata, dispatch)
+    }
+
+    private suspend fun acceptCommand(
+        metadata: CleanMediaSessionMetadata,
+        dispatch: suspend () -> Unit,
+    ): Long = withActiveHost {
+        val priorGeneration = snapshot.value.generation
+        withContext(NonCancellable) {
+            dispatch()
+            releaseAuthority.updateMetadata(metadata)
+            snapshot.first { it.generation > priorGeneration }.generation
+        }
+    }
+
+    private fun requireLive(selection: ProviderPlaybackSelection) {
+        require(selection.contentType == ContentType.LIVE) {
+            "Clean live playback host accepts live selections only"
+        }
+    }
+
+    private sealed interface ReleaseAuthority {
+        fun updateMetadata(metadata: CleanMediaSessionMetadata)
+        suspend fun release()
+
+        class MediaSession(
+            private val owner: CleanMediaSessionOwner,
+        ) : ReleaseAuthority {
+            override fun updateMetadata(metadata: CleanMediaSessionMetadata) {
+                // System metadata is optional; a platform facade failure must not stop Live TV.
+                runCatching { owner.updateMetadata(metadata) }
+            }
+
+            override suspend fun release() = owner.release()
+        }
+
+        class ControllerFallback(
+            private val controller: PlaybackSessionController,
+        ) : ReleaseAuthority {
+            override fun updateMetadata(metadata: CleanMediaSessionMetadata) = Unit
+            override suspend fun release() = controller.release()
+        }
+    }
+
+    companion object {
+        private val neutralMetadata = CleanMediaSessionMetadata.fromIngress(
+            redactedContentFingerprint = "",
+            title = "Tuvora",
+        )
+
+        private val productionMediaSessionFactory = CleanMediaSessionOwnerFactory {
+                context,
+                applicationLooper,
+                parentScope,
+                controller,
+                metadata,
+            ->
+            CleanMediaSessionOwner.create(
+                context = context,
+                applicationLooper = applicationLooper,
+                parentScope = parentScope,
+                controller = controller,
+                metadata = metadata,
+            )
+        }
+
+        suspend fun create(
+            context: Context,
+            preferenceProfileId: PlaybackProfileId,
+            parentScope: CoroutineScope,
+            sessionFactory: ProductionPlaybackSessionFactory,
+            surfaces: CleanLiveSurfaceCoordinator,
+            outputController: PlaybackOutputController,
+            lifecycle: PlaybackLifecyclePort,
+            previewViewport: VideoDimensions? = null,
+            resourceBudget: ResourceBudget = ResourceBudget(),
+            routedAudioDevice: () -> AudioDeviceInfo? = { null },
+            externalSubtitleResolver: ExternalSubtitleResolver = ExternalSubtitleResolver { null },
+            applicationLooper: Looper = Looper.getMainLooper(),
+            applicationDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+            mediaSessionFactory: CleanMediaSessionOwnerFactory = productionMediaSessionFactory,
+        ): CleanLivePlaybackHost {
+            val parentJob = parentScope.coroutineContext[Job]
+            val hostJob = SupervisorJob(parentJob)
+            val hostScope = CoroutineScope(parentScope.coroutineContext + hostJob)
+            val productionHost = ProductionPlaybackHost(
+                parentScope = hostScope,
+                media3SurfaceHost = surfaces.media3SurfaceHost,
+                mpvSurfaceHost = surfaces.mpvSurfaceHost,
+                surfaceCapabilities = surfaces.capabilities,
+                outputController = outputController,
+                lifecycle = lifecycle,
+                previewViewport = previewViewport,
+                resourceBudget = resourceBudget,
+                routedAudioDevice = routedAudioDevice,
+                externalSubtitleResolver = externalSubtitleResolver,
+            )
+            val controller = try {
+                sessionFactory.create(preferenceProfileId, productionHost)
+            } catch (cancelled: CancellationException) {
+                hostScope.cancel()
+                throw cancelled
+            } catch (error: Exception) {
+                hostScope.cancel()
+                throw error
+            }
+            if (!surfaces.bindController(controller)) {
+                cleanupFailedCreation(controller, surfaces, hostScope, disposeSurfaces = false)
+                error("Clean playback surface coordinator rejected its controller")
+            }
+            val hostingStarted = try {
+                surfaces.startHosting()
+            } catch (cancelled: CancellationException) {
+                cleanupFailedCreation(controller, surfaces, hostScope)
+                throw cancelled
+            } catch (error: Exception) {
+                cleanupFailedCreation(controller, surfaces, hostScope)
+                throw error
+            }
+            if (!hostingStarted) {
+                cleanupFailedCreation(controller, surfaces, hostScope)
+                error("Clean playback surface coordinator could not start")
+            }
+
+            val mediaSessionOwner = try {
+                withContext(applicationDispatcher) {
+                    mediaSessionFactory.create(
+                        context = context.applicationContext,
+                        applicationLooper = applicationLooper,
+                        parentScope = hostScope,
+                        controller = controller,
+                        metadata = neutralMetadata,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                cleanupFailedCreation(controller, surfaces, hostScope)
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            val authority = mediaSessionOwner
+                ?.let { ReleaseAuthority.MediaSession(it) }
+                ?: ReleaseAuthority.ControllerFallback(controller)
+            return CleanLivePlaybackHost(
+                hostJob = hostJob,
+                controller = controller,
+                surfaces = surfaces,
+                releaseAuthority = authority,
+            )
+        }
+
+        private suspend fun cleanupFailedCreation(
+            controller: PlaybackSessionController,
+            surfaces: CleanLiveSurfaceCoordinator,
+            hostScope: CoroutineScope,
+            disposeSurfaces: Boolean = true,
+        ) = withContext(NonCancellable) {
+            // Fail closed: never detach surfaces or cancel ownership before the barrier is proven.
+            controller.release()
+            if (disposeSurfaces) {
+                check(surfaces.disposeAfterSessionRelease()) {
+                    "Clean playback surfaces still have an attached lease after session release"
+                }
+            }
+            hostScope.cancel()
+        }
+    }
+}

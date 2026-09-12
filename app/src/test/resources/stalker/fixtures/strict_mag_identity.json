@@ -1,0 +1,47 @@
+{
+  "name": "strict_mag_identity",
+  "supported": true,
+  "gap": null,
+  "endpoints": [
+    "/portal.php",
+    "/stalker_portal/server/load.php",
+    "/server/load.php",
+    "/c/portal.php",
+    "/stb/server/load.php"
+  ],
+  "responses": [
+    {
+      "action": "handshake",
+      "body": "{\"js\":{\"token\":\"token-strict\"}}"
+    },
+    {
+      "action": "get_profile",
+      "match": {
+        "stb_type": "MAG250"
+      },
+      "body": "Authorization failed."
+    },
+    {
+      "action": "get_profile",
+      "match": {
+        "stb_type": "MAG254"
+      },
+      "body": "{\"js\":{\"id\":\"5\",\"name\":\"Strict\",\"status\":0}}"
+    },
+    {
+      "action": "get_genres",
+      "body": "{\"js\":[{\"id\":\"7\",\"title\":\"Docs\"}]}"
+    }
+  ],
+  "expect": {
+    "requestOrder": [
+      "handshake",
+      "get_profile",
+      "get_events",
+      "get_genres"
+    ]
+  },
+  "contentRequiresActions": [
+    "get_profile"
+  ]
+}

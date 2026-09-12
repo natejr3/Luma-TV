@@ -1,0 +1,67 @@
+package com.nuvio.tv.data.remote.api
+
+import com.nuvio.tv.data.remote.dto.XtreamAccountDto
+import com.nuvio.tv.data.remote.dto.XtreamCategoryDto
+import com.nuvio.tv.data.remote.dto.XtreamLiveStreamDto
+import com.nuvio.tv.data.remote.dto.XtreamSeriesDto
+import com.nuvio.tv.data.remote.dto.XtreamSeriesInfoResponseDto
+import com.nuvio.tv.data.remote.dto.XtreamShortEpgResponseDto
+import com.nuvio.tv.data.remote.dto.XtreamVodInfoResponseDto
+import com.nuvio.tv.data.remote.dto.XtreamVodStreamDto
+import okhttp3.ResponseBody
+import retrofit2.Response
+import retrofit2.http.GET
+import retrofit2.http.Streaming
+import retrofit2.http.Url
+
+/**
+ * Xtream Codes API. Every call hits `player_api.php` on the user's own panel,
+ * so URLs are built by [com.nuvio.tv.core.iptv.XtreamClient] and passed via @Url
+ * (same pattern as [AddonApi]).
+ */
+interface XtreamApi {
+
+    @GET
+    suspend fun getAccount(@Url url: String): Response<XtreamAccountDto>
+
+    @GET
+    suspend fun getCategories(@Url url: String): Response<List<XtreamCategoryDto>>
+
+    @GET
+    suspend fun getLiveStreams(@Url url: String): Response<List<XtreamLiveStreamDto>>
+
+    @GET
+    suspend fun getVodStreams(@Url url: String): Response<List<XtreamVodStreamDto>>
+
+    @GET
+    suspend fun getSeries(@Url url: String): Response<List<XtreamSeriesDto>>
+
+    /**
+     * Undecoded catalog body, for the match-index build only. Retrofit+Moshi would
+     * materialize the whole array as DTOs before anything could reduce it; the index reads
+     * this a title at a time instead, which is what keeps a 175k-item panel off the heap on
+     * a TV stick. Callers MUST close the body.
+     */
+    @Streaming
+    @GET
+    suspend fun getRawCatalog(@Url url: String): Response<ResponseBody>
+
+    @GET
+    suspend fun getShortEpg(@Url url: String): Response<XtreamShortEpgResponseDto>
+
+    /**
+     * Undecoded body for `get_simple_data_table` — a channel's FULL guide, past included, which is
+     * what makes catch-up's "days back" real. Streamed for the same reason as [getRawCatalog]: a
+     * busy channel's week is a large payload and the XMLTV out-of-memory crash was caused by
+     * holding a guide response in the heap. Callers MUST close the body.
+     */
+    @Streaming
+    @GET
+    suspend fun getRawEpgTable(@Url url: String): Response<ResponseBody>
+
+    @GET
+    suspend fun getVodInfo(@Url url: String): Response<XtreamVodInfoResponseDto>
+
+    @GET
+    suspend fun getSeriesInfo(@Url url: String): Response<XtreamSeriesInfoResponseDto>
+}

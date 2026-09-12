@@ -1,0 +1,145 @@
+# Clean-player real-device adapter smoke harness
+
+**Status:** debug Media3/libmpv lab wired; it does not auto-launch or auto-open a stream.
+
+`scripts/playback_device_smoke.py` is currently scoped only to the authorized ONN device
+(`192.168.1.236:5555`). Fire TV is off, deferred, and untested in this certification pass. The
+harness never queries or addresses it. The harness protects one-connection IPTV accounts by
+refusing a second run while a lease is active, refusing to begin while the debug app or any
+package-suffixed service process runs on ONN, and making every run pass through pause, adapter
+release, force-stop, and confirmed process absence.
+
+The harness never accepts a URL, header, cookie, username, password, playlist identifier, channel
+name, or provider name. `--fixture-id` is a local sanitized alias only. Assign the provider fixture
+outside this tool; never place that mapping in a report or command.
+
+## Adapter instrumentation contract
+
+The debug-only `CleanMedia3PlaybackLabActivity` emits single-line facts for the explicitly selected
+Media3 or libmpv engine at info level under tag
+`CleanPlaybackSmoke`. The line starts with `CP_SMOKE v=1` and uses space-separated `key=value`
+tokens. It must not log raw exceptions or request material. Example:
+
+```text
+CP_SMOKE v=1 event=STATE engine=MEDIA3 profile=GUIDE generation=3 player_state=READY play_when_ready=true is_loading=false
+CP_SMOKE v=1 event=RENDERER engine=MEDIA3 renderer=MediaCodecVideoRenderer decoder=c2.amlogic.avc.decoder
+CP_SMOKE v=1 event=RENDERER engine=MEDIA3 renderer=MediaCodecVideoRenderer codec=AVC
+CP_SMOKE v=1 event=SURFACE engine=MEDIA3 surface_type=SURFACE_VIEW surface_valid=true surface_width=960 surface_height=540 secure=false
+CP_SMOKE v=1 event=VIDEO engine=MEDIA3 rendered_first_frame=true
+CP_SMOKE v=1 event=VIDEO engine=MEDIA3 video_width=1920 video_height=1080
+CP_SMOKE v=1 event=STATE engine=LIBMPV profile=GUIDE generation=4 player_state=READY play_when_ready=true is_loading=false
+CP_SMOKE v=1 event=RENDERER engine=LIBMPV renderer=libmpv decoder=mediacodec codec=HEVC
+CP_SMOKE v=1 event=SURFACE engine=LIBMPV surface_type=MPV_DIRECT surface_valid=true surface_width=1920 surface_height=1080 secure=false
+CP_SMOKE v=1 event=AUDIO engine=LIBMPV rendered_first_audio=true
+CP_SMOKE v=1 event=ERROR engine=LIBMPV error_domain=VIDEO_DECODER error_code=DECODER_INIT phase=STARTUP fatal=true
+CP_SMOKE v=1 event=RELEASE engine=LIBMPV release_outcome=GRACEFUL provider_owned=false surface_owned=false release_nonce=0123456789abcdef
+```
+
+The parser keeps only the closed version-1 event/field vocabulary in the script. Unknown fields are
+discarded. A line containing a URL or secret marker is discarded in full. SurfaceFlinger and window
+dumps are reduced in memory to process/focus, app-layer count, and layer-type facts; raw dumps and
+raw log lines are never written.
+
+The debug lab must handle the package-scoped broadcast
+`com.tuvora.tv.debug.action.PLAYBACK_SMOKE_RELEASE` by pausing the session and awaiting the clean
+session release barrier. It emits `RELEASE` only after both provider and surface ownership are
+affirmatively ended, echoing the broadcast's `smoke_nonce` extra as `release_nonce`. The harness
+accepts only that fresh correlated event, so an earlier successful release cannot satisfy a later
+run. It force-stops afterward even when release succeeds: adapter proof and next-run safety are
+separate requirements.
+
+## Sequential ONN procedure
+
+Use a sanitized fixture alias. Do not pass a provider URL to the shell.
+
+```bash
+python3 scripts/playback_device_smoke.py status
+python3 scripts/playback_device_smoke.py begin \
+  --device onn --run-id wp4-media3-hls-ts --fixture-id onn-hls-ts-a
+```
+
+After `begin`, install/open the debug lab manually. Use **Previous** / **Next** to choose the saved
+live recent assigned to this run, verify both stable preflight reason codes, and press **Start
+Media3**. Capture startup, first frame, stable playback, and surface recreation, then quiesce:
+
+```bash
+python3 scripts/playback_device_smoke.py capture --device onn --suffix first-frame
+python3 scripts/playback_device_smoke.py capture --device onn --suffix surface-recreated
+python3 scripts/playback_device_smoke.py quiesce --device onn --require-release-proof
+python3 scripts/playback_device_smoke.py status
+```
+
+Begin a second ONN run only after that release proof, select the same fingerprint, and press **Start
+libmpv**. The lab uses the exact same in-memory `PlaybackRequest` intent and GUIDE/PREVIEW session
+profile with the clean libmpv direct graph; it never starts Media3 concurrently:
+
+```bash
+python3 scripts/playback_device_smoke.py begin \
+  --device onn --run-id wp5-libmpv-hls-ts --fixture-id onn-hls-ts-a
+python3 scripts/playback_device_smoke.py capture --device onn --suffix first-frame
+# Press Recreate surface, then capture the same-generation result.
+python3 scripts/playback_device_smoke.py capture --device onn --suffix surface-recreated
+python3 scripts/playback_device_smoke.py quiesce --device onn --require-release-proof
+```
+
+Begin each later ONN run only after the preceding run has produced release proof and status confirms
+the ONN debug process is absent. The command-line device choice intentionally contains only `onn`;
+Fire TV must be deliberately restored to the certification scope and tests before the harness can
+address it.
+
+Ephemeral state and sanitized JSON reports default to
+`/tmp/nuvio-playback-device-smoke`. A failed `--require-release-proof` still force-stops and confirms
+the process absent, so switching is safe, but it fails the WP4 deterministic-release gate. Do not
+represent process absence alone as adapter release proof.
+
+## Debug-profile boundary and lab operation
+
+The lab is compiled only into `com.tuvora.tv.debug`. Android app-private storage means it cannot
+read or import the production `com.tuvora.tv` profile. Prepare the debug package through its normal
+UI: sign in/sync or add the assigned playlist, select that playlist, play one live channel long
+enough to create a recent, then stop playback. Do this separately for each device/fixture. Never
+copy, export, hard-code, or pass production credentials to ADB.
+
+The lab loads saved live recents and their accounts only from the active debug profile. It has no
+URL, credential, account, channel, or playlist Intent extras. Every choice is shown as a sanitized
+channel label plus redacted playlist ordinal and ten-hex-character fingerprint; URL-like,
+query-like, or authentication-like names become `Live channel`. Raw account/provider IDs never
+enter the View or log.
+
+Selecting a recent maps its stored secret URL once and runs graph preflight for both engines before
+either Start action is enabled. The UI shows only stable results such as `ELIGIBLE`,
+`ACCOUNT_DISABLED`, `SOURCE_UNSUPPORTED`, `NO_ELIGIBLE_GRAPH`, or `SYSTEM_DNS_FALLBACK`. V1 libmpv
+uses system DNS when the shared request intent selects application DoH, while Media3 honors DoH;
+that engine-specific execution decision is shown as `SYSTEM_DNS_FALLBACK` and does not mutate the
+shared request. Playback starts only after the operator presses **Start Media3** or **Start libmpv**;
+both actions and fixture selection are disabled while either clean engine owns the single active
+provider request.
+
+After `begin`, launch the Activity on the active device only:
+
+```bash
+adb -s 192.168.1.236:5555 shell am start \
+  -n com.tuvora.tv.debug/com.nuvio.tv.playback.lab.CleanMedia3PlaybackLabActivity
+```
+
+The **Recreate surface** action detaches the selected clean Media3 or libmpv surface, rebuilds the same
+graph-selected View, and reattaches it to the existing backend on the same generation. It does not
+resolve the URL again, construct a second backend, or restart the provider request. Leaving the lab
+foreground also starts the pause/release barrier; harness `quiesce` remains mandatory before
+switching engine or device.
+
+## Report acceptance
+
+For every Media3 and libmpv fixture, record the same displayed fingerprint and preflight reason.
+The report must contain normalized state plus the selected renderer,
+decoder, surface type/validity/size, first-frame/video dimensions, and any stable error code/domain.
+The release report must prove `provider_owned=false` and `surface_owned=false`. ONN must show each
+engine's independently selected surface path.
+No report may contain a network location, request value, account/provider/channel identity, raw
+exception, or device address.
+
+Host tests:
+
+```bash
+PYTHONPATH=scripts python3 -m unittest scripts.tests.test_playback_device_smoke
+```
