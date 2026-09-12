@@ -84,6 +84,35 @@ class EmbyClient(private val http: OkHttpClient = OkHttpClient()) {
             ),
         )
 
+    suspend fun findMatchingItems(
+        session: EmbySession,
+        type: String,
+        tmdbId: String?,
+        imdbId: String?,
+    ): List<EmbyItem> {
+        val includeType = if (type.equals("series", true) || type.equals("tv", true)) "Series" else "Movie"
+        val providerKeys = buildList {
+            tmdbId?.takeIf { it.isNotBlank() }?.let { add("tmdb.$it") }
+            imdbId?.takeIf { it.isNotBlank() }?.let { add("imdb.$it") }
+        }
+        val matched = mutableListOf<EmbyItem>()
+        for (providerKey in providerKeys) {
+            val items = runCatching {
+                getItems(
+                    session,
+                    "/Users/${session.userId}/Items",
+                    common(includeType) + mapOf(
+                        "AnyProviderIdEquals" to providerKey,
+                        "Limit" to "20",
+                    ),
+                )
+            }.getOrDefault(emptyList())
+            matched += items
+            if (matched.isNotEmpty()) break
+        }
+        return matched.distinctBy { it.id }
+    }
+
     fun imageUrl(session: EmbySession, item: EmbyItem, backdrop: Boolean = false): String? {
         val tag = if (backdrop) item.backdropTag else item.imageTag
         if (tag == null) return null

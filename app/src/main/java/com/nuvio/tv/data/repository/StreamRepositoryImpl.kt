@@ -52,7 +52,8 @@ class StreamRepositoryImpl @Inject constructor(
     private val xtreamRegistry: com.nuvio.tv.core.iptv.XtreamItemRegistry,
     private val iptvClientFactory: com.nuvio.tv.core.iptv.IptvClientFactory,
     private val xtreamAccountStore: com.nuvio.tv.data.local.XtreamAccountStore,
-    private val xtreamStreamSource: com.nuvio.tv.core.iptv.match.XtreamStreamSource
+    private val xtreamStreamSource: com.nuvio.tv.core.iptv.match.XtreamStreamSource,
+    private val embyStreamSource: com.nuvio.tv.emby.EmbyStreamSource
 ) : StreamRepository {
     // When paused, local (installed-plugin) stream search is skipped so an IPTV/direct play
     // does not also fire a redundant addon scrape. Fork-appropriate one-shot gate (checked at
@@ -237,7 +238,8 @@ class StreamRepositoryImpl @Inject constructor(
                 // Track number of pending jobs
                 val totalJobs = streamAddons.size +
                     (if (pluginRequest != null) 1 else 0) +
-                    xtreamMatchTargets.size
+                    xtreamMatchTargets.size +
+                    1 // Emby library match lane
                 val completedJobs = java.util.concurrent.atomic.AtomicInteger(0)
 
                 // Launch addon jobs
@@ -319,6 +321,21 @@ class StreamRepositoryImpl @Inject constructor(
                             if (completedJobs.incrementAndGet() >= totalJobs) {
                                 resultChannel.close()
                             }
+                        }
+                    }
+                }
+
+                // Match normal Home/Discover items against the connected Emby library.
+                launch {
+                    try {
+                        val groups = embyStreamSource.streamsFor(type, videoId, season, episode)
+                        groups.forEach { resultChannel.send(it) }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Log.w(TAG, "Emby stream match failed for $videoId: ${e.message}")
+                    } finally {
+                        if (completedJobs.incrementAndGet() >= totalJobs) {
+                            resultChannel.close()
                         }
                     }
                 }
