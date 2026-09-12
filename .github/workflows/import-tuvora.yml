@@ -1,0 +1,44 @@
+name: Import TuvoraTV into Luma-TV
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/import-tuvora.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Luma-TV
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone TuvoraTV
+        run: |
+          rm -rf /tmp/TuvoraTV
+          git clone --depth 1 https://github.com/paradox-kush/TuvoraTV.git /tmp/TuvoraTV
+
+      - name: Replace Luma-TV contents with TuvoraTV
+        run: |
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.github/workflows/import-tuvora.yml' \
+            /tmp/TuvoraTV/ ./
+          rm -f .github/workflows/import-tuvora.yml
+
+      - name: Commit imported source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Replace Luma-TV with TuvoraTV base source'
+            git push origin HEAD:main
+          fi
