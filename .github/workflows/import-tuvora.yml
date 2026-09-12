@@ -27,9 +27,8 @@ jobs:
         run: |
           rsync -a --delete \
             --exclude='.git' \
-            --exclude='.github/workflows/import-tuvora.yml' \
+            --exclude='.github/workflows/' \
             /tmp/TuvoraTV/ ./
-          rm -f .github/workflows/import-tuvora.yml
 
       - name: Commit imported source
         run: |
