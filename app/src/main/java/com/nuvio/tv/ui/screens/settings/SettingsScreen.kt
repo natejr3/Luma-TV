@@ -239,6 +239,7 @@ fun SettingsScreen(
     onNavigateToSupportersContributors: () -> Unit = {},
     onNavigateToLicensesAttributions: () -> Unit = {},
     onNavigateToIptvPairing: () -> Unit = {},
+    onNavigateToEmbyConnect: () -> Unit = {},
     profileViewModel: ProfileSettingsViewModel = hiltViewModel(),
     experienceModeViewModel: ExperienceModeSettingsViewModel = hiltViewModel()
 ) {
@@ -545,7 +546,8 @@ fun SettingsScreen(
                                 onNavigateToAuthQrSignIn = onNavigateToAuthQrSignIn,
                                 onNavigateToSupportersContributors = onNavigateToSupportersContributors,
                                 onNavigateToLicensesAttributions = onNavigateToLicensesAttributions,
-                                onNavigateToIptvPairing = onNavigateToIptvPairing
+                                onNavigateToIptvPairing = onNavigateToIptvPairing,
+                                onNavigateToEmbyConnect = onNavigateToEmbyConnect
                             )
                         }
                     }
@@ -698,7 +700,8 @@ fun SettingsScreen(
                         onNavigateToAuthQrSignIn = onNavigateToAuthQrSignIn,
                         onNavigateToSupportersContributors = onNavigateToSupportersContributors,
                         onNavigateToLicensesAttributions = onNavigateToLicensesAttributions,
-                        onNavigateToIptvPairing = onNavigateToIptvPairing
+                        onNavigateToIptvPairing = onNavigateToIptvPairing,
+                        onNavigateToEmbyConnect = onNavigateToEmbyConnect
                     )
                 }
             }
@@ -728,7 +731,8 @@ private fun SettingsDetailPane(
     onNavigateToAuthQrSignIn: () -> Unit,
     onNavigateToSupportersContributors: () -> Unit,
     onNavigateToLicensesAttributions: () -> Unit,
-    onNavigateToIptvPairing: () -> Unit
+    onNavigateToIptvPairing: () -> Unit,
+    onNavigateToEmbyConnect: () -> Unit
 ) {
     when (selectedCategory) {
         SettingsCategory.EXPERIENCE -> EssentialAdvancedSettingsContent(
@@ -813,6 +817,7 @@ private fun SettingsDetailPane(
             animeSkipFocusRequester = integrationAnimeSkipFocusRequester,
             iptvFocusRequester = integrationIptvFocusRequester,
             onNavigateToIptvPairing = onNavigateToIptvPairing,
+            onNavigateToEmbyConnect = onNavigateToEmbyConnect,
             autoFocusEnabled = allowDetailAutofocus
         )
         SettingsCategory.ABOUT -> AboutSettingsContent(
@@ -1000,6 +1005,7 @@ private fun IntegrationSettingsContent(
     animeSkipFocusRequester: FocusRequester,
     iptvFocusRequester: FocusRequester,
     onNavigateToIptvPairing: () -> Unit,
+    onNavigateToEmbyConnect: () -> Unit,
     autoFocusEnabled: Boolean
 ) {
     BackHandler(enabled = selectedSection != IntegrationSettingsSection.Hub) {
@@ -1069,6 +1075,13 @@ private fun IntegrationSettingsContent(
                                     title = "Anime-Skip",
                                     subtitle = stringResource(R.string.settings_animeskip_subtitle),
                                     onClick = { onSelectSection(IntegrationSettingsSection.AnimeSkip) }
+                                )
+                            }
+                            item(key = "integration_hub_emby") {
+                                SettingsActionRow(
+                                    title = "Emby Connect",
+                                    subtitle = "Connect or manage your Emby server",
+                                    onClick = onNavigateToEmbyConnect
                                 )
                             }
                             item(key = "integration_hub_iptv") {

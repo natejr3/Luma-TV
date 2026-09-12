@@ -813,7 +813,6 @@ class MainActivity : ComponentActivity() {
                             // them out made showSidebar false there, which cost all three of the
                             // sidebar's behaviours at once: no rail, no LEFT-to-open, and BACK
                             // popping to Home instead of returning focus to the sidebar.
-                            add(Screen.Emby.route)
                             add(Screen.XtreamHub.route)
                             add(Screen.SportsHub.route)
                             add(Screen.Settings.route)
@@ -865,13 +864,6 @@ class MainActivity : ComponentActivity() {
                                     route = Screen.Library.route,
                                     label = strNavLibrary,
                                     iconRes = R.raw.sidebar_library
-                                )
-                            )
-                            add(
-                                DrawerItem(
-                                    route = Screen.Emby.route,
-                                    label = "Emby",
-                                    icon = Icons.Default.LiveTv
                                 )
                             )
                             add(

@@ -1301,7 +1301,8 @@ fun NuvioNavHost(
                 onNavigateToLicensesAttributions = {
                     navController.navigate(Screen.LicensesAttributions.route)
                 },
-                onNavigateToIptvPairing = { navController.navigate(Screen.IptvPairing.route) }
+                onNavigateToIptvPairing = { navController.navigate(Screen.IptvPairing.route) },
+                onNavigateToEmbyConnect = { navController.navigate(Screen.Emby.route) }
             )
         }
 
