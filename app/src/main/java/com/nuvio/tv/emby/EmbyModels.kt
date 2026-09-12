@@ -47,6 +47,8 @@ data class EmbyPlaybackSource(
     val headers: Map<String, String>,
     val item: EmbyItem,
     val isDirectPlay: Boolean,
+    val fileName: String? = null,
+    val fileSizeBytes: Long? = null,
 )
 
 data class EmbyHomeCatalog(
