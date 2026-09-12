@@ -8,10 +8,12 @@ import com.nuvio.tv.domain.model.ProxyHeaders
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "EmbyStreamSource"
+private const val SERVER_NAME = "Omega"
 
 @Singleton
 class EmbyStreamSource @Inject constructor(
@@ -61,19 +63,19 @@ class EmbyStreamSource @Inject constructor(
             matched
         }
 
-        val streams = playableItems.distinctBy { it.id }.take(12).mapNotNull { item ->
+        val streams = playableItems.distinctBy { it.id }.take(8).mapNotNull { item ->
             val source = runCatching { client.playbackSource(session, item) }
                 .onFailure { Log.w(TAG, "Emby playback resolve failed for ${item.name}: ${it.message}") }
                 .getOrNull() ?: return@mapNotNull null
 
+            val fileName = source.fileName?.takeIf { it.isNotBlank() } ?: item.name
+            val sizeLabel = source.fileSizeBytes?.let(::formatFileSize)
+            val details = listOfNotNull(sizeLabel, fileName).joinToString(" • ")
+
             Stream(
-                name = "Emby",
-                title = item.name,
-                description = buildString {
-                    append("Emby")
-                    item.year?.let { append(" • $it") }
-                    if (source.isDirectPlay) append(" • Direct Play") else append(" • Transcode")
-                },
+                name = SERVER_NAME,
+                title = details.ifBlank { fileName },
+                description = details.ifBlank { "$SERVER_NAME • $fileName" },
                 url = source.uri,
                 ytId = null,
                 infoHash = null,
@@ -87,20 +89,31 @@ class EmbyStreamSource @Inject constructor(
                         request = source.headers,
                         response = null,
                     ),
-                    filename = item.name,
+                    filename = fileName,
                 ),
-                addonName = "Emby",
+                addonName = SERVER_NAME,
                 addonLogo = null,
-                sources = listOf("Emby"),
+                sources = listOf(SERVER_NAME),
             )
         }
 
         return if (streams.isEmpty()) emptyList() else listOf(
             AddonStreams(
-                addonName = "Emby",
+                addonName = SERVER_NAME,
                 addonLogo = null,
                 streams = streams,
             )
         )
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        if (bytes <= 0L) return ""
+        val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        return if (gb >= 1.0) {
+            String.format(Locale.US, "%.2f GB", gb)
+        } else {
+            val mb = bytes.toDouble() / (1024.0 * 1024.0)
+            String.format(Locale.US, "%.0f MB", mb)
+        }
     }
 }
