@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.R
+import com.nuvio.tv.core.build.AppFeaturePolicy
 import com.nuvio.tv.updater.model.AppUpdate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -46,6 +47,12 @@ class UpdateViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            if (!AppFeaturePolicy.inAppUpdatesEnabled) {
+                _uiState.update {
+                    it.copy(updateBannerEnabled = false, showBanner = false, isChecking = false)
+                }
+                return@launch
+            }
             val enabled = updatePreferences.updateBannerEnabled.first()
             _uiState.update { it.copy(updateBannerEnabled = enabled) }
             if (enabled && !BuildConfig.IS_DEBUG_BUILD) {

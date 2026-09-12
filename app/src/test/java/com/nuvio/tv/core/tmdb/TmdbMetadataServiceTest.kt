@@ -46,6 +46,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import retrofit2.Response
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TmdbMetadataServiceTest {
@@ -97,6 +98,31 @@ class TmdbMetadataServiceTest {
         assertNotNull(enrichment)
         assertEquals(55, enrichment?.productionCompanies?.firstOrNull()?.tmdbId)
         assertEquals(77, enrichment?.networks?.firstOrNull()?.tmdbId)
+    }
+
+    @Test
+    fun `fetchEnrichment keeps cast when an optional metadata request fails`() = runTest {
+        val api = mockk<TmdbApi>()
+        coEvery { api.getMovieDetails(any(), any(), any()) } returns Response.success(
+            TmdbDetailsResponse(id = 11, title = "Resilient Movie")
+        )
+        coEvery { api.getMovieCredits(any(), any(), any()) } returns Response.success(
+            TmdbCreditsResponse(
+                cast = listOf(TmdbCastMember(id = 7, name = "Visible Actor", character = "Lead"))
+            )
+        )
+        coEvery { api.getMovieImages(any(), any(), any()) } throws IOException("image endpoint unavailable")
+        coEvery { api.getMovieReleaseDates(any(), any()) } returns Response.success(TmdbMovieReleaseDatesResponse())
+        coEvery { api.getMovieVideos(any(), any(), any()) } returns Response.success(TmdbVideosResponse(id = 11))
+
+        val enrichment = TmdbMetadataService(api).fetchEnrichment(
+            tmdbId = "11",
+            contentType = ContentType.MOVIE,
+            language = "en",
+        )
+
+        assertEquals("Visible Actor", enrichment?.castMembers?.singleOrNull()?.name)
+        assertEquals("Lead", enrichment?.castMembers?.singleOrNull()?.character)
     }
 
     @Test

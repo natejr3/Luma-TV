@@ -1,5 +1,9 @@
 package com.nuvio.tv.emby
 
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
+import com.nuvio.tv.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,12 +21,15 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class EmbyClient(private val http: OkHttpClient = OkHttpClient()) {
-    private val deviceId = "luma-tv-${UUID.randomUUID()}"
+class EmbyClient(
+    private val http: OkHttpClient = sharedHttp,
+    private val deviceId: String = "luma-tv-android-tv",
+    private val appVersion: String = BuildConfig.VERSION_NAME,
+) {
 
     suspend fun authenticate(server: String, username: String, password: String): EmbySession {
         val normalized = server.trim().trimEnd('/').let {
@@ -290,7 +297,33 @@ class EmbyClient(private val http: OkHttpClient = OkHttpClient()) {
     }
 
     private fun authorization(token: String? = null): String = buildString {
-        append("MediaBrowser Client=\"Luma TV\", Device=\"Android TV\", DeviceId=\"$deviceId\", Version=\"1.0\"")
+        append("MediaBrowser Client=\"Luma TV\", Device=\"${deviceName()}\", DeviceId=\"$deviceId\", Version=\"$appVersion\"")
         if (token != null) append(", Token=\"$token\"")
+    }
+
+    private fun deviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL)
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .distinctBy(String::lowercase)
+        .joinToString(" ")
+        .ifBlank { "Android TV" }
+
+    companion object {
+        private val sharedHttp: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+
+        fun forDevice(context: Context): EmbyClient {
+            val androidId = Settings.Secure.getString(
+                context.applicationContext.contentResolver,
+                Settings.Secure.ANDROID_ID,
+            ).orEmpty().trim().ifBlank { "android-tv" }
+            return EmbyClient(deviceId = "luma-tv-$androidId")
+        }
     }
 }

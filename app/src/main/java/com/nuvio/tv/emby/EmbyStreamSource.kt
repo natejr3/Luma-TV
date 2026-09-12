@@ -8,13 +8,16 @@ import com.nuvio.tv.domain.model.ProxyHeaders
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "EmbyStreamSource"
-private const val SERVER_NAME = "Omega"
+private const val SERVER_NAME = "omega"
 private const val MATCH_CACHE_TTL_MS = 5 * 60 * 1000L
 
 @Singleton
@@ -22,7 +25,7 @@ class EmbyStreamSource @Inject constructor(
     @ApplicationContext context: Context,
     private val tmdbService: TmdbService,
 ) {
-    private val client = EmbyClient()
+    private val client = EmbyClient.forDevice(context)
     private val sessionStore = EmbySessionStore(context.applicationContext)
     private val matchCache = ConcurrentHashMap<String, Pair<Long, List<EmbyItem>>>()
     private val episodeCache = ConcurrentHashMap<String, Pair<Long, List<EmbyItem>>>()
@@ -84,38 +87,47 @@ class EmbyStreamSource @Inject constructor(
             matched
         }
 
-        val streams = playableItems.distinctBy { it.id }.take(4).mapNotNull { item ->
-            val source = runCatching { client.playbackSource(session, item) }
-                .onFailure { Log.w(TAG, "Omega playback resolve failed for ${item.name}: ${it.message}") }
-                .getOrNull() ?: return@mapNotNull null
+        // PlaybackInfo calls are independent. Resolve the few available editions in parallel
+        // so a multi-version movie does not make a TV user wait on serial network round trips.
+        val streams = coroutineScope {
+            playableItems.distinctBy { it.id }.take(4).map { item ->
+                async {
+                    val source = runCatching { client.playbackSource(session, item) }
+                        .onFailure { Log.w(TAG, "omega playback resolve failed for ${item.name}: ${it.message}") }
+                        .getOrNull() ?: return@async null
 
-            val fileName = source.fileName?.takeIf { it.isNotBlank() } ?: item.name
-            val sizeLabel = source.fileSizeBytes?.let(::formatFileSize)
-            val details = listOfNotNull(sizeLabel, fileName).joinToString(" • ")
+                    val fileName = source.fileName?.takeIf { it.isNotBlank() } ?: item.name
+                    val sizeLabel = source.fileSizeBytes?.let(::formatFileSize)?.takeIf(String::isNotBlank)
+                    val details = listOfNotNull(sizeLabel, fileName).joinToString(" • ")
 
-            Stream(
-                name = SERVER_NAME,
-                title = details.ifBlank { fileName },
-                description = details.ifBlank { "$SERVER_NAME • $fileName" },
-                url = source.uri,
-                ytId = null,
-                infoHash = null,
-                fileIdx = null,
-                externalUrl = null,
-                behaviorHints = StreamBehaviorHints(
-                    notWebReady = false,
-                    bingeGroup = null,
-                    countryWhitelist = null,
-                    proxyHeaders = ProxyHeaders(
-                        request = source.headers,
-                        response = null,
-                    ),
-                    filename = fileName,
-                ),
-                addonName = SERVER_NAME,
-                addonLogo = null,
-                sources = listOf(SERVER_NAME),
-            )
+                    Stream(
+                        // StreamCard prioritizes `name`, so put the useful file details here
+                        // instead of the old generic "Direct Play Emby"/server label.
+                        name = details.ifBlank { fileName },
+                        title = fileName,
+                        description = sizeLabel,
+                        url = source.uri,
+                        ytId = null,
+                        infoHash = null,
+                        fileIdx = null,
+                        externalUrl = null,
+                        behaviorHints = StreamBehaviorHints(
+                            notWebReady = false,
+                            bingeGroup = null,
+                            countryWhitelist = null,
+                            proxyHeaders = ProxyHeaders(
+                                request = source.headers,
+                                response = null,
+                            ),
+                            videoSize = source.fileSizeBytes,
+                            filename = fileName,
+                        ),
+                        addonName = SERVER_NAME,
+                        addonLogo = null,
+                        sources = listOf(SERVER_NAME),
+                    )
+                }
+            }.awaitAll().filterNotNull()
         }
 
         return if (streams.isEmpty()) emptyList() else listOf(

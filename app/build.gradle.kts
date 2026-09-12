@@ -15,6 +15,15 @@ import java.security.MessageDigest
 import java.util.Properties
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
+// The PostHog Gradle plugin wires its CLI upload as a finalizer of release assembly even when
+// no CLI/auth is configured. Keep runtime analytics, but do not turn a valid APK build into a
+// failure after packaging (the CI release job intentionally has no PostHog upload credentials).
+tasks.configureEach {
+    if (name.startsWith("uploadPostHogProguardMappings", ignoreCase = true)) {
+        enabled = false
+    }
+}
+
 fun File.sha256(): String = inputStream().use { input ->
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -150,8 +159,8 @@ android {
             abiFilters.clear()
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
-        versionCode = providers.gradleProperty("versionCodeOverride").orNull?.toIntOrNull() ?: 1050
-        versionName = providers.gradleProperty("versionNameOverride").orNull?.takeIf { it.isNotBlank() } ?: "0.8.9-beta"
+        versionCode = providers.gradleProperty("versionCodeOverride").orNull?.toIntOrNull() ?: 1051
+        versionName = providers.gradleProperty("versionNameOverride").orNull?.takeIf { it.isNotBlank() } ?: "0.9.0-omega"
 
         buildConfigField("String", "PARENTAL_GUIDE_API_URL", "\"${localProperties.getProperty("PARENTAL_GUIDE_API_URL", "")}\"")
         buildConfigField("String", "INTRODB_API_URL", "\"${localProperties.getProperty("INTRODB_API_URL", "")}\"")

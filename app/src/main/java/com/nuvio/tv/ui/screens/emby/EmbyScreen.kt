@@ -53,7 +53,7 @@ fun EmbyScreen(
 ) {
     val context = LocalContext.current
     val store = remember(context) { EmbySessionStore(context.applicationContext) }
-    val client = remember { EmbyClient() }
+    val client = remember(context) { EmbyClient.forDevice(context) }
     val scope = rememberCoroutineScope()
 
     var session by remember { mutableStateOf<EmbySession?>(null) }
@@ -81,7 +81,7 @@ fun EmbyScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "Omega",
+                text = "omega",
                 color = NuvioTheme.colors.TextPrimary,
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
@@ -103,7 +103,7 @@ fun EmbyScreen(
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    text = "Connected to Omega",
+                    text = "Connected to omega",
                     color = NuvioTheme.colors.TextPrimary,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -116,7 +116,7 @@ fun EmbyScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "Luma will scan Omega automatically when you open movies and shows. The old Emby library browser has been removed.",
+                    text = "Luma scans omega automatically when you open movies and shows.",
                     color = NuvioTheme.colors.TextSecondary,
                     fontSize = 15.sp,
                 )
@@ -174,7 +174,7 @@ fun EmbyScreen(
                                         session = it
                                         password = ""
                                     }
-                                    .onFailure { error = it.message ?: "Could not connect to Omega." }
+                                    .onFailure { error = it.message ?: "Could not connect to omega." }
                                 loading = false
                             }
                         }
@@ -205,7 +205,7 @@ fun EmbyScreen(
                                         session = it
                                         password = ""
                                     }
-                                    .onFailure { error = it.message ?: "Could not connect to Omega." }
+                                    .onFailure { error = it.message ?: "Could not connect to omega." }
                                 loading = false
                             }
                         },
@@ -214,7 +214,7 @@ fun EmbyScreen(
                         if (loading) {
                             CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
                         } else {
-                            androidx.compose.material3.Text("Connect Omega", fontWeight = FontWeight.Bold)
+                            androidx.compose.material3.Text("Connect omega", fontWeight = FontWeight.Bold)
                         }
                     }
                 }

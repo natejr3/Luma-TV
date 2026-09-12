@@ -95,35 +95,43 @@ class TmdbMetadataService(
                 // Fetch details, credits, images, alt titles, and trailers in parallel
                 val (details, credits, images, ageRating, altTitles, trailers) = coroutineScope {
                     val detailsDeferred = async {
-                        when (tmdbType) {
-                            "tv" -> tmdbApi.getTvDetails(numericId, TMDB_API_KEY, normalizedLanguage)
-                            else -> tmdbApi.getMovieDetails(numericId, TMDB_API_KEY, normalizedLanguage)
-                        }.body()
+                        bestEffort("details", numericId) {
+                            when (tmdbType) {
+                                "tv" -> tmdbApi.getTvDetails(numericId, TMDB_API_KEY, normalizedLanguage)
+                                else -> tmdbApi.getMovieDetails(numericId, TMDB_API_KEY, normalizedLanguage)
+                            }.body()
+                        }
                     }
                     val creditsDeferred = async {
-                        when (tmdbType) {
-                            "tv" -> {
-                                val aggregate = tmdbApi.getTvAggregateCredits(numericId, TMDB_API_KEY, normalizedLanguage).body()
-                                aggregate?.let { mapAggregateCreditsToStandard(it) }
+                        bestEffort("credits", numericId) {
+                            when (tmdbType) {
+                                "tv" -> {
+                                    val aggregate = tmdbApi.getTvAggregateCredits(numericId, TMDB_API_KEY, normalizedLanguage).body()
+                                    aggregate?.let { mapAggregateCreditsToStandard(it) }
+                                }
+                                else -> tmdbApi.getMovieCredits(numericId, TMDB_API_KEY, normalizedLanguage).body()
                             }
-                            else -> tmdbApi.getMovieCredits(numericId, TMDB_API_KEY, normalizedLanguage).body()
                         }
                     }
                     val imagesDeferred = async {
-                        when (tmdbType) {
-                            "tv" -> tmdbApi.getTvImages(numericId, TMDB_API_KEY, includeImageLanguage)
-                            else -> tmdbApi.getMovieImages(numericId, TMDB_API_KEY, includeImageLanguage)
-                        }.body()
+                        bestEffort("images", numericId) {
+                            when (tmdbType) {
+                                "tv" -> tmdbApi.getTvImages(numericId, TMDB_API_KEY, includeImageLanguage)
+                                else -> tmdbApi.getMovieImages(numericId, TMDB_API_KEY, includeImageLanguage)
+                            }.body()
+                        }
                     }
                     val ageRatingDeferred = async {
-                        when (tmdbType) {
-                            "tv" -> {
-                                val ratings = tmdbApi.getTvContentRatings(numericId, TMDB_API_KEY).body()?.results.orEmpty()
-                                selectTvAgeRating(ratings, normalizedLanguage)
-                            }
-                            else -> {
-                                val releases = tmdbApi.getMovieReleaseDates(numericId, TMDB_API_KEY).body()?.results.orEmpty()
-                                selectMovieAgeRating(releases, normalizedLanguage)
+                        bestEffort("age rating", numericId) {
+                            when (tmdbType) {
+                                "tv" -> {
+                                    val ratings = tmdbApi.getTvContentRatings(numericId, TMDB_API_KEY).body()?.results.orEmpty()
+                                    selectTvAgeRating(ratings, normalizedLanguage)
+                                }
+                                else -> {
+                                    val releases = tmdbApi.getMovieReleaseDates(numericId, TMDB_API_KEY).body()?.results.orEmpty()
+                                    selectMovieAgeRating(releases, normalizedLanguage)
+                                }
                             }
                         }
                     }
@@ -138,11 +146,13 @@ class TmdbMetadataService(
                         }.getOrDefault(emptyList())
                     }
                     val trailersDeferred = async {
-                        fetchTmdbTrailers(
-                            tmdbId = numericId,
-                            tmdbType = tmdbType,
-                            preferredLanguage = normalizedLanguage
-                        )
+                        bestEffort("trailers", numericId) {
+                            fetchTmdbTrailers(
+                                tmdbId = numericId,
+                                tmdbType = tmdbType,
+                                preferredLanguage = normalizedLanguage
+                            )
+                        }.orEmpty()
                     }
                     Sextuple(
                         detailsDeferred.await(),
@@ -483,6 +493,20 @@ class TmdbMetadataService(
                 enrichmentInFlight.remove(cacheKey, requestDeferred)
             }
         }
+
+    private suspend fun <T> bestEffort(
+        field: String,
+        tmdbId: Int,
+        request: suspend () -> T,
+    ): T? = try {
+        request()
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (error: Exception) {
+        // One optional metadata endpoint must not erase successful details or credits.
+        Log.w(TAG, "Failed to fetch TMDB $field for $tmdbId: ${error.message}")
+        null
+    }
 
     private suspend fun fetchTmdbTrailers(
         tmdbId: Int,
