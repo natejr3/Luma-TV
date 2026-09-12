@@ -27,8 +27,16 @@ jobs:
       - name: Install Android 36 SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
-      - name: Build signed release APK
+      - name: Build release APK
         run: ./gradlew -p cinejoy-tv :app:assembleRelease --stacktrace
+
+      - name: Validate APK contents
+        run: |
+          APK=cinejoy-tv/app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          unzip -l "$APK" | tee cinejoy-apk-contents.txt
+          unzip -l "$APK" | grep -q 'classes.dex'
+          test $(stat -c%s "$APK") -gt 500000
 
       - name: Prepare APK
         run: cp cinejoy-tv/app/build/outputs/apk/release/app-release.apk CineJoy-TV.apk
@@ -36,7 +44,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: CineJoy-TV
-          path: CineJoy-TV.apk
+          path: |
+            CineJoy-TV.apk
+            cinejoy-apk-contents.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -46,7 +56,7 @@ jobs:
         run: |
           if gh release view cinejoy-tv-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload cinejoy-tv-latest CineJoy-TV.apk --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit cinejoy-tv-latest --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'CineJoy TV 1.0.1' --notes 'Fixed Android/Android TV build with a real launcher activity, WebView playback, fullscreen video, persistent cookies, hardware acceleration, and TV remote support.'
+            gh release edit cinejoy-tv-latest --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'CineJoy TV 1.1.0' --notes 'TV-focused CineJoy build with enhanced D-pad navigation, modern focus states, resilient loading/error UI, persistent WebView sessions, and a native Media3 player for direct HLS/DASH/MP4 playback.'
           else
-            gh release create cinejoy-tv-latest CineJoy-TV.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'CineJoy TV 1.0.1' --notes 'Fixed Android/Android TV build with a real launcher activity, WebView playback, fullscreen video, persistent cookies, hardware acceleration, and TV remote support.'
+            gh release create cinejoy-tv-latest CineJoy-TV.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'CineJoy TV 1.1.0' --notes 'TV-focused CineJoy build with enhanced D-pad navigation, modern focus states, resilient loading/error UI, persistent WebView sessions, and a native Media3 player for direct HLS/DASH/MP4 playback.'
           fi
