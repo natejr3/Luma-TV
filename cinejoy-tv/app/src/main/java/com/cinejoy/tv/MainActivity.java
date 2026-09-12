@@ -2,6 +2,7 @@ package com.cinejoy.tv;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
@@ -18,6 +19,7 @@ import android.widget.FrameLayout;
 
 public class MainActivity extends Activity {
     private static final String HOME_URL = "https://cinejoy.to/";
+
     private FrameLayout root;
     private WebView webView;
     private View fullscreenView;
@@ -28,7 +30,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -38,6 +40,7 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(Color.BLACK);
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         root.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
@@ -53,15 +56,23 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setLoadWithOverviewMode(true);
+        settings.setLoadWithOverviewMode(false);
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setAllowContentAccess(true);
         settings.setAllowFileAccess(true);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         settings.setUserAgentString(settings.getUserAgentString() + " CineJoyTV/1.0.1 AndroidTV");
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            settings.setOffscreenPreRaster(true);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        }
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
@@ -70,17 +81,22 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                view.loadUrl(request.getUrl().toString());
-                return true;
+                return false;
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
+                // Preserve the website exactly; only improve TV navigation behavior.
                 view.evaluateJavascript(
-                        "(function(){document.documentElement.style.scrollBehavior='smooth';" +
-                        "document.addEventListener('keydown',function(e){var a=document.activeElement;" +
-                        "if(e.key==='Enter'&&a&&a.click){a.click();}});})();",
+                        "(function(){" +
+                        "document.documentElement.style.scrollBehavior='smooth';" +
+                        "if(window.__cinejoyTvKeys)return;window.__cinejoyTvKeys=true;" +
+                        "document.addEventListener('keydown',function(e){" +
+                        "var a=document.activeElement;" +
+                        "if(e.key==='Enter'&&a&&typeof a.click==='function'){a.click();}" +
+                        "});" +
+                        "})();",
                         null);
             }
         });
@@ -98,6 +114,7 @@ public class MainActivity extends Activity {
                 root.addView(view, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
+                fullscreenView.requestFocus();
                 hideSystemUi();
             }
 
