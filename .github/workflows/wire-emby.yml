@@ -1,0 +1,75 @@
+name: Wire Emby into Tuvora navigation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/wire-emby.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch navigation and sidebar
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          screen = Path('app/src/main/java/com/nuvio/tv/ui/navigation/Screen.kt')
+          text = screen.read_text()
+          needle = '    data object XtreamHub : Screen("xtream_hub")\n'
+          replacement = '    data object Emby : Screen("emby")\n' + needle
+          if 'data object Emby : Screen("emby")' not in text:
+              if needle not in text:
+                  raise SystemExit('Screen.kt insertion point not found')
+              text = text.replace(needle, replacement, 1)
+              screen.write_text(text)
+
+          nav = Path('app/src/main/java/com/nuvio/tv/ui/navigation/NuvioNavHost.kt')
+          text = nav.read_text()
+          needle = '        composable(Screen.IptvSettings.route) {\n'
+          block = '''        composable(Screen.Emby.route) {\n            com.nuvio.tv.ui.screens.emby.EmbyScreen(\n                onBack = {\n                    navController.navigate(Screen.Home.route) {\n                        launchSingleTop = true\n                    }\n                },\n                onPlay = { source, session ->\n                    val item = source.item\n                    val poster = item.imageTag?.let { tag ->\n                        "${session.serverUrl}/Items/${item.id}/Images/Primary?tag=$tag&maxWidth=600&quality=88&api_key=${session.accessToken}"\n                    }\n                    val backdrop = item.backdropTag?.let { tag ->\n                        "${session.serverUrl}/Items/${item.id}/Images/Backdrop?tag=$tag&maxWidth=1920&quality=88&api_key=${session.accessToken}"\n                    }\n                    navController.navigate(\n                        Screen.Player.createRoute(\n                            streamUrl = source.uri,\n                            title = item.name,\n                            streamName = if (source.isDirectPlay) "Emby • Direct Play" else "Emby • Transcode",\n                            headers = source.headers,\n                            contentType = "emby",\n                            contentName = item.name,\n                            poster = poster,\n                            backdrop = backdrop,\n                            videoId = item.id,\n                            season = item.parentIndexNumber,\n                            episode = item.indexNumber,\n                            episodeTitle = item.name,\n                            addonName = "Emby",\n                        )\n                    )\n                }\n            )\n        }\n\n'''
+          if 'composable(Screen.Emby.route)' not in text:
+              if needle not in text:
+                  raise SystemExit('NuvioNavHost.kt insertion point not found')
+              text = text.replace(needle, block + needle, 1)
+              nav.write_text(text)
+
+          main = Path('app/src/main/java/com/nuvio/tv/MainActivity.kt')
+          text = main.read_text()
+          root_needle = '                            add(Screen.XtreamHub.route)\n                            add(Screen.SportsHub.route)\n'
+          root_replacement = '                            add(Screen.Emby.route)\n' + root_needle
+          if 'add(Screen.Emby.route)' not in text:
+              if root_needle not in text:
+                  raise SystemExit('MainActivity root route insertion point not found')
+              text = text.replace(root_needle, root_replacement, 1)
+
+          drawer_needle = '''                            add(\n                                DrawerItem(\n                                    route = Screen.XtreamHub.route,\n                                    label = "IPTV",\n                                    icon = Icons.Default.LiveTv\n                                )\n                            )\n'''
+          drawer_block = '''                            add(\n                                DrawerItem(\n                                    route = Screen.Emby.route,\n                                    label = "Emby",\n                                    icon = Icons.Default.LiveTv\n                                )\n                            )\n'''
+          if 'route = Screen.Emby.route' not in text:
+              if drawer_needle not in text:
+                  raise SystemExit('MainActivity drawer insertion point not found')
+              text = text.replace(drawer_needle, drawer_block + drawer_needle, 1)
+          main.write_text(text)
+          PY
+
+      - name: Commit navigation integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/nuvio/tv/ui/navigation/Screen.kt \
+                  app/src/main/java/com/nuvio/tv/ui/navigation/NuvioNavHost.kt \
+                  app/src/main/java/com/nuvio/tv/MainActivity.kt
+          if git diff --cached --quiet; then
+            echo 'Navigation already wired.'
+          else
+            git commit -m 'Add Emby destination to Tuvora TV navigation'
+            git push origin HEAD:main
+          fi
