@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Local Emby servers often use HTTP. Prefer HTTPS for remote servers. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
