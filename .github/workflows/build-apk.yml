@@ -11,14 +11,32 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Cache Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure original Tuvora backend integrations
+        run: |
+          {
+            echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}"
+            echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}"
+            echo "TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}"
+            echo "TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}"
+            echo "TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}"
+            echo "SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}"
+            echo "SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}"
+            echo "TV_LOGIN_WEB_BASE_URL=https://qsonncwknzdixurjyqap.functions.supabase.co/tv-login-approve"
+            echo "IPTV_PAIRING_WEB_BASE_URL=https://tuvora.co/iptv-pairing/"
+          } >> local.properties
 
       - name: Create CI signing key
         run: |
@@ -32,14 +50,16 @@ jobs:
             -validity 10000 \
             -dname "CN=Luma TV, OU=Android TV, O=Luma, L=El Paso, ST=Texas, C=US"
 
-      - name: Build installable TV APK
-        run: bash ./gradlew :app:assembleFullDebug --no-daemon --stacktrace
+      - name: Build lightweight optimized TV APK
+        run: |
+          printf '\norg.gradle.jvmargs=-Xmx6g -Dfile.encoding=UTF-8\n' >> gradle.properties
+          ./gradlew :app:assembleFullRelease --no-daemon --stacktrace
 
       - name: Prepare universal ARM TV APK
         run: |
-          APK=$(find app/build/outputs/apk/full/debug -type f -name '*universal*.apk' | head -n 1)
+          APK=$(find app/build/outputs/apk/full/release -type f -name '*universal*.apk' | head -n 1)
           if [ -z "$APK" ]; then
-            APK=$(find app/build/outputs/apk/full/debug -type f -name '*.apk' | head -n 1)
+            APK=$(find app/build/outputs/apk/full/release -type f -name '*.apk' | head -n 1)
           fi
           if [ -z "$APK" ]; then
             echo "No APK found"
