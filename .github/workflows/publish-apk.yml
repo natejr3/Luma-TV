@@ -1,0 +1,41 @@
+name: Publish Luma TV APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download successful APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh run download 34675221141 \
+            --repo natejr3/Luma-TV \
+            --name Luma-TV-Android-TV-APK \
+            --dir dist
+          test -f dist/Luma-TV-Android-TV.apk
+
+      - name: Publish stable APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view luma-tv-latest --repo natejr3/Luma-TV >/dev/null 2>&1; then
+            gh release delete luma-tv-latest --repo natejr3/Luma-TV --yes --cleanup-tag
+          fi
+          gh release create luma-tv-latest \
+            dist/Luma-TV-Android-TV.apk \
+            --repo natejr3/Luma-TV \
+            --title 'Luma TV Android TV APK' \
+            --notes 'TuvoraTV-based Luma TV build with Emby support. Universal ARM Android TV APK.' \
+            --latest
