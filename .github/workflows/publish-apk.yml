@@ -20,7 +20,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist
-          gh run download 34676785796 \
+          gh run download 34678779584 \
             --repo natejr3/Luma-TV \
             --name Luma-TV-Android-TV-APK \
             --dir dist
@@ -37,5 +37,5 @@ jobs:
             dist/Luma-TV-Android-TV.apk \
             --repo natejr3/Luma-TV \
             --title 'Luma TV Android TV APK' \
-            --notes 'Latest Luma TV Android TV build with Emby Connect in Settings and Home-to-Emby matching. Universal ARM Android TV APK.' \
+            --notes 'Corrected Luma TV Android TV build with Emby Connect in Settings only and Home-to-Emby matching. Universal ARM Android TV APK.' \
             --latest
