@@ -5,6 +5,7 @@ import com.nuvio.tv.data.remote.dto.MetaLinkDto
 import com.nuvio.tv.data.remote.dto.VideoDto
 import com.nuvio.tv.domain.model.ContentType
 import com.nuvio.tv.domain.model.Meta
+import com.nuvio.tv.domain.model.MetaCastMember
 import com.nuvio.tv.domain.model.MetaLink
 import com.nuvio.tv.domain.model.PosterShape
 import com.nuvio.tv.domain.model.Video
@@ -12,11 +13,17 @@ import com.nuvio.tv.domain.model.Video
 fun MetaDto.toDomain(episodeLabel: String = "Episode"): Meta {
     val directorMembers = mapPeople(appExtras?.directors, roleFallback = "Director", forceRole = true)
     val writerMembers = mapPeople(appExtras?.writers, roleFallback = "Writer", forceRole = true)
-    val castMembers = mapPeople(appExtras?.cast)
+    val richCastMembers = mapPeople(appExtras?.cast)
     val directors = coerceStringList(director).ifEmpty { directorMembers.map { it.name } }
     val writersList = coerceStringList(writer).ifEmpty { coerceStringList(writers) }
         .ifEmpty { writerMembers.map { it.name } }
-    val castList = coerceStringList(cast).ifEmpty { castMembers.map { it.name } }
+    val castList = coerceStringList(cast).ifEmpty { richCastMembers.map { it.name } }
+    // A lot of Stremio catalog/meta addons only provide the plain `cast` string list.
+    // Keep those names visible on TV instead of hiding the entire Cast section while TMDB
+    // enrichment is unavailable or still loading. Rich entries win when they exist.
+    val visibleCastMembers = richCastMembers.ifEmpty {
+        castList.distinct().take(40).map { name -> MetaCastMember(name = name) }
+    }
     val trailersList = mapTrailers(trailers, trailerStreams)
 
     return Meta(
@@ -41,7 +48,7 @@ fun MetaDto.toDomain(episodeLabel: String = "Episode"): Meta {
         director = directors,
         writer = writersList,
         cast = castList,
-        castMembers = directorMembers + writerMembers + castMembers,
+        castMembers = directorMembers + writerMembers + visibleCastMembers,
         videos = videos?.map { it.toDomain(episodeLabel) } ?: emptyList(),
         productionCompanies = emptyList(),
         networks = emptyList(),
