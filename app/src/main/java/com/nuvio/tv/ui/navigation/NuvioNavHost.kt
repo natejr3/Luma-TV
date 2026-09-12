@@ -1245,6 +1245,42 @@ fun NuvioNavHost(
             )
         }
 
+        composable(Screen.Emby.route) {
+            com.nuvio.tv.ui.screens.emby.EmbyScreen(
+                onBack = {
+                    navController.navigate(Screen.Home.route) {
+                        launchSingleTop = true
+                    }
+                },
+                onPlay = { source, session ->
+                    val item = source.item
+                    val poster = item.imageTag?.let { tag ->
+                        "${session.serverUrl}/Items/${item.id}/Images/Primary?tag=$tag&maxWidth=600&quality=88&api_key=${session.accessToken}"
+                    }
+                    val backdrop = item.backdropTag?.let { tag ->
+                        "${session.serverUrl}/Items/${item.id}/Images/Backdrop?tag=$tag&maxWidth=1920&quality=88&api_key=${session.accessToken}"
+                    }
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            streamUrl = source.uri,
+                            title = item.name,
+                            streamName = if (source.isDirectPlay) "Emby • Direct Play" else "Emby • Transcode",
+                            headers = source.headers,
+                            contentType = "emby",
+                            contentName = item.name,
+                            poster = poster,
+                            backdrop = backdrop,
+                            videoId = item.id,
+                            season = item.parentIndexNumber,
+                            episode = item.indexNumber,
+                            episodeTitle = item.name,
+                            addonName = "Emby",
+                        )
+                    )
+                }
+            )
+        }
+
         composable(Screen.IptvSettings.route) {
             com.nuvio.tv.ui.screens.settings.XtreamSettingsContent(
                 onPairFromPhone = { navController.navigate(Screen.IptvPairing.route) }

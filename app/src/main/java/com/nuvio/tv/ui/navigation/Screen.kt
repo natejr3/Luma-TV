@@ -157,6 +157,7 @@ sealed class Screen(val route: String) {
     data object SupportersContributors : Screen("supporters_contributors")
     data object LicensesAttributions : Screen("licenses_attributions")
     data object AddonManager : Screen("addon_manager")
+    data object Emby : Screen("emby")
     data object XtreamHub : Screen("xtream_hub")
 
     // The IPTV settings screen as a destination in its own right. XtreamSettingsContent draws its
