@@ -10,13 +10,11 @@ android {
         applicationId = "com.cinejoy.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "2.0.0"
     }
 
-    signingConfigs {
-        getByName("debug")
-    }
+    signingConfigs { getByName("debug") }
 
     buildTypes {
         release {
@@ -29,6 +27,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("com.github.bumptech.glide:glide:4.16.0")
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
     implementation("androidx.media3:media3-exoplayer-dash:1.8.0")
