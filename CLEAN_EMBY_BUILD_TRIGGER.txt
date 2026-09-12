@@ -1,0 +1,1 @@
+Trigger build after Emby sidebar removal and Settings-only connect integration.
