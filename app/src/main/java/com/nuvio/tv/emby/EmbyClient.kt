@@ -149,12 +149,17 @@ class EmbyClient(private val http: OkHttpClient = OkHttpClient()) {
             "X-Emby-Authorization" to authorization(session.accessToken),
         )
         if (source == null) {
-            return@withContext EmbyPlaybackSource(staticStreamUrl(session, item), headers, item, true)
+            return@withContext EmbyPlaybackSource(
+                staticStreamUrl(session, item), headers, item, true, fileName = item.name
+            )
         }
 
         val mediaSourceId = source.optString("Id")
         val direct = source.optBoolean("SupportsDirectPlay", true)
         val transcodingUrl = source.optString("TranscodingUrl").takeIf { it.isNotBlank() }
+        val fileName = sourceFileName(source, item)
+        val fileSizeBytes = source.optLong("Size").takeIf { it > 0L }
+
         when {
             direct -> EmbyPlaybackSource(
                 uri = (session.serverUrl + "/Videos/${item.id}/stream").toHttpUrl().newBuilder()
@@ -165,15 +170,32 @@ class EmbyClient(private val http: OkHttpClient = OkHttpClient()) {
                 headers = headers,
                 item = item,
                 isDirectPlay = true,
+                fileName = fileName,
+                fileSizeBytes = fileSizeBytes,
             )
             transcodingUrl != null -> EmbyPlaybackSource(
                 uri = if (transcodingUrl.startsWith("http")) transcodingUrl else session.serverUrl + transcodingUrl,
                 headers = headers,
                 item = item,
                 isDirectPlay = false,
+                fileName = fileName,
+                fileSizeBytes = fileSizeBytes,
             )
-            else -> EmbyPlaybackSource(staticStreamUrl(session, item), headers, item, true)
+            else -> EmbyPlaybackSource(
+                staticStreamUrl(session, item), headers, item, true, fileName, fileSizeBytes
+            )
         }
+    }
+
+    private fun sourceFileName(source: JSONObject, item: EmbyItem): String {
+        val path = source.optString("Path").takeIf { it.isNotBlank() }
+        val pathName = path
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('\\')
+            ?.takeIf { it.isNotBlank() }
+        return pathName
+            ?: source.optString("Name").takeIf { it.isNotBlank() }
+            ?: item.name
     }
 
     private fun staticStreamUrl(session: EmbySession, item: EmbyItem): String =
