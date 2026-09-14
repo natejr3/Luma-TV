@@ -220,7 +220,9 @@ internal fun PlayerRuntimeController.loadSourceStreams(forceRefresh: Boolean) {
             type = type,
             videoId = vid,
             season = seasonArg,
-            episode = episodeArg
+            episode = episodeArg,
+            lookupTitle = contentName ?: title,
+            lookupYear = year?.toIntOrNull(),
         ).collect { result ->
             when (result) {
                 is NetworkResult.Success -> {
@@ -1137,7 +1139,9 @@ internal fun PlayerRuntimeController.loadStreamsForEpisode(video: Video, forceRe
             type = type,
             videoId = video.id,
             season = video.season,
-            episode = video.episode
+            episode = video.episode,
+            lookupTitle = contentName ?: title,
+            lookupYear = year?.toIntOrNull(),
         ).collect { result ->
             when (result) {
                 is NetworkResult.Success -> {
@@ -1756,7 +1760,9 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
                     type = type,
                     videoId = nextVideo.id,
                     season = nextVideo.season,
-                    episode = nextVideo.episode
+                    episode = nextVideo.episode,
+                    lookupTitle = contentName ?: title,
+                    lookupYear = year?.toIntOrNull(),
                 ).collect { result ->
                     when (result) {
                         is NetworkResult.Success -> {

@@ -645,6 +645,8 @@ class StreamScreenViewModel @Inject constructor(
                     videoId = videoId,
                     season = season,
                     episode = episode,
+                    lookupTitle = contentName ?: title,
+                    lookupYear = year?.toIntOrNull(),
                     forceRefresh = forceRefresh
                 ).collect { result ->
                     when (result) {

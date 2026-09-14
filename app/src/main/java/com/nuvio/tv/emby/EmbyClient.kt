@@ -29,6 +29,7 @@ class EmbyClient(
     private val http: OkHttpClient = sharedHttp,
     private val deviceId: String = "luma-tv-android-tv",
     private val appVersion: String = BuildConfig.VERSION_NAME,
+    private val deviceDisplayName: String? = null,
 ) {
 
     suspend fun authenticate(server: String, username: String, password: String): EmbySession {
@@ -96,6 +97,8 @@ class EmbyClient(
         type: String,
         tmdbId: String?,
         imdbId: String?,
+        title: String? = null,
+        year: Int? = null,
     ): List<EmbyItem> {
         val includeType = if (type.equals("series", true) || type.equals("tv", true)) "Series" else "Movie"
         val providerKeys = buildList {
@@ -117,7 +120,28 @@ class EmbyClient(
             matched += items
             if (matched.isNotEmpty()) break
         }
-        return matched.distinctBy { it.id }
+        val providerMatches = matched.distinctBy { it.id }
+        if (providerMatches.isNotEmpty()) return providerMatches
+
+        // Catalog-only addons such as Xperience often use private IDs. Ask Emby for only a
+        // small title result set, then require a normalized exact title (and prefer its year).
+        // This is one bounded request, not a resident full-library index, which keeps low-memory
+        // Android TV devices responsive.
+        val searchTitle = title?.trim()?.takeIf(String::isNotBlank) ?: return emptyList()
+        val candidates = runCatching {
+            getItems(
+                session,
+                "/Users/${session.userId}/Items",
+                common(includeType) + mapOf(
+                    "SearchTerm" to searchTitle,
+                    "Limit" to "12",
+                ),
+            )
+        }.getOrDefault(emptyList())
+        val normalizedSearch = normalizeEmbyTitle(searchTitle)
+        val exact = candidates.filter { normalizeEmbyTitle(it.name) == normalizedSearch }
+        val yearMatches = year?.let { requested -> exact.filter { it.year == requested } }.orEmpty()
+        return (yearMatches.ifEmpty { exact }).distinctBy { it.id }.take(4)
     }
 
     fun imageUrl(session: EmbySession, item: EmbyItem, backdrop: Boolean = false): String? {
@@ -297,7 +321,8 @@ class EmbyClient(
     }
 
     private fun authorization(token: String? = null): String = buildString {
-        append("MediaBrowser Client=\"Luma TV\", Device=\"${deviceName()}\", DeviceId=\"$deviceId\", Version=\"$appVersion\"")
+        val resolvedDeviceName = deviceDisplayName?.takeIf(String::isNotBlank) ?: deviceName()
+        append("MediaBrowser Client=\"Luma TV\", Device=\"$resolvedDeviceName\", DeviceId=\"$deviceId\", Version=\"$appVersion\"")
         if (token != null) append(", Token=\"$token\"")
     }
 
@@ -327,3 +352,6 @@ class EmbyClient(
         }
     }
 }
+
+internal fun normalizeEmbyTitle(value: String): String =
+    value.lowercase().filter(Char::isLetterOrDigit)

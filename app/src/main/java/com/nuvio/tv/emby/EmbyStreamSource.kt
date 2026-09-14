@@ -30,11 +30,18 @@ class EmbyStreamSource @Inject constructor(
     private val matchCache = ConcurrentHashMap<String, Pair<Long, List<EmbyItem>>>()
     private val episodeCache = ConcurrentHashMap<String, Pair<Long, List<EmbyItem>>>()
 
+    val sourceName: String get() = SERVER_NAME
+
+    fun hasSession(): Boolean = sessionStore.hasSession()
+
     suspend fun streamsFor(
         type: String,
         videoId: String,
         season: Int?,
         episode: Int?,
+        lookupTitle: String? = null,
+        lookupYear: Int? = null,
+        forceRefresh: Boolean = false,
     ): List<AddonStreams> {
         val session = sessionStore.load() ?: return emptyList()
         val normalizedType = when (type.lowercase()) {
@@ -43,26 +50,60 @@ class EmbyStreamSource @Inject constructor(
             else -> return emptyList()
         }
 
-        val baseId = videoId.substringBefore(':').substringBefore('/').trim()
-        val cacheKey = "${session.userId}|$normalizedType|$baseId"
-        val matched = cached(matchCache, cacheKey) ?: run {
+        val baseId = embyBaseContentId(videoId, normalizedType)
+        val normalizedTitle = lookupTitle?.trim()?.takeIf(String::isNotBlank)
+        val cacheKey = "${session.userId}|$normalizedType|$baseId|${normalizedTitle.orEmpty().lowercase()}|${lookupYear ?: 0}"
+        val matched = (if (forceRefresh) null else cached(matchCache, cacheKey)) ?: run {
             val directImdb = baseId.takeIf { it.startsWith("tt", ignoreCase = true) }
-            val tmdbId = runCatching { tmdbService.ensureTmdbId(baseId, normalizedType) }.getOrNull()
+            val directTmdb = baseId.removePrefix("tmdb:").takeIf { value ->
+                value.isNotBlank() && value.all(Char::isDigit)
+            }
 
-            // Fast path: most libraries already carry a TMDB provider id. Avoid the extra
-            // TMDB->IMDb network request unless the TMDB lookup fails to find Omega content.
+            // Query the identity already supplied by the catalog first. For private catalog IDs,
+            // this goes straight to the bounded title search without touching TMDB at all.
             var found = runCatching {
-                client.findMatchingItems(session, normalizedType, tmdbId, directImdb)
+                client.findMatchingItems(
+                    session = session,
+                    type = normalizedType,
+                    tmdbId = directTmdb,
+                    imdbId = directImdb,
+                    title = normalizedTitle,
+                    year = lookupYear,
+                )
             }.onFailure { Log.w(TAG, "Omega match failed for $videoId: ${it.message}") }
                 .getOrDefault(emptyList())
 
-            if (found.isEmpty() && directImdb == null && tmdbId != null) {
+            // Only pay for an external ID conversion if the catalog identity and title both miss.
+            if (found.isEmpty() && directImdb != null) {
+                val mappedTmdb = runCatching {
+                    tmdbService.ensureTmdbId(directImdb, normalizedType)
+                }.getOrNull()
+                if (!mappedTmdb.isNullOrBlank()) {
+                    found = runCatching {
+                        client.findMatchingItems(
+                            session = session,
+                            type = normalizedType,
+                            tmdbId = mappedTmdb,
+                            imdbId = null,
+                            title = normalizedTitle,
+                            year = lookupYear,
+                        )
+                    }.getOrDefault(emptyList())
+                }
+            } else if (found.isEmpty() && directTmdb != null) {
                 val fallbackImdb = runCatching {
-                    tmdbService.tmdbToImdb(tmdbId.toInt(), normalizedType)
+                    tmdbService.tmdbToImdb(directTmdb.toInt(), normalizedType)
                 }.getOrNull()
                 if (!fallbackImdb.isNullOrBlank()) {
                     found = runCatching {
-                        client.findMatchingItems(session, normalizedType, null, fallbackImdb)
+                        client.findMatchingItems(
+                            session = session,
+                            type = normalizedType,
+                            tmdbId = null,
+                            imdbId = fallbackImdb,
+                            title = normalizedTitle,
+                            year = lookupYear,
+                        )
                     }.getOrDefault(emptyList())
                 }
             }
@@ -75,7 +116,7 @@ class EmbyStreamSource @Inject constructor(
         val playableItems = if (normalizedType == "series" && season != null && episode != null) {
             matched.flatMap { series ->
                 val key = "${session.userId}|${series.id}"
-                val episodes = cached(episodeCache, key) ?: run {
+                val episodes = (if (forceRefresh) null else cached(episodeCache, key)) ?: run {
                     val loaded = runCatching { client.loadSeriesEpisodes(session, series.id) }
                         .getOrDefault(emptyList())
                     putCached(episodeCache, key, loaded)
@@ -170,4 +211,15 @@ class EmbyStreamSource @Inject constructor(
             String.format(Locale.US, "%.0f MB", mb)
         }
     }
+}
+
+/** Keep namespaced catalog IDs intact; only strip the numeric S:E suffix used for episodes. */
+internal fun embyBaseContentId(videoId: String, normalizedType: String): String {
+    val clean = videoId.substringBefore('/').trim()
+    if (normalizedType != "series") return clean
+    val parts = clean.split(':')
+    val hasEpisodeSuffix = parts.size >= 3 &&
+        parts[parts.lastIndex].toIntOrNull() != null &&
+        parts[parts.lastIndex - 1].toIntOrNull() != null
+    return if (hasEpisodeSuffix) parts.dropLast(2).joinToString(":") else clean
 }

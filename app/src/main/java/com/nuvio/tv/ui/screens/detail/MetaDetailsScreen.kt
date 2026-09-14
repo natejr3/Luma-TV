@@ -534,8 +534,8 @@ fun MetaDetailsScreen(
                             video.season,
                             video.episode,
                             video.title,
-                            null,
-                            null,
+                            genresString,
+                            yearString,
                             video.runtime,
                             meta.resolveContentLanguage()
                         )
@@ -552,8 +552,8 @@ fun MetaDetailsScreen(
                             video.season,
                             video.episode,
                             video.title,
-                            null,
-                            null,
+                            genresString,
+                            yearString,
                             video.runtime,
                             meta.resolveContentLanguage()
                         )
@@ -606,8 +606,8 @@ fun MetaDetailsScreen(
                             video.season,
                             video.episode,
                             video.title,
-                            null,
-                            null,
+                            genresString,
+                            yearString,
                             video.runtime,
                             meta.resolveContentLanguage()
                         )

@@ -19,6 +19,10 @@ interface StreamRepository {
         videoId: String,
         season: Int? = null,
         episode: Int? = null,
+        // Catalog addons are free to use private IDs. These hints let a connected personal
+        // media server resolve the same title without requiring that catalog's stream endpoint.
+        lookupTitle: String? = null,
+        lookupYear: Int? = null,
         // Accepted for API parity with upstream's force-refresh call site. The fork re-fetches
         // streams on every collect (no result cache at this layer), so it is always "fresh".
         forceRefresh: Boolean = false

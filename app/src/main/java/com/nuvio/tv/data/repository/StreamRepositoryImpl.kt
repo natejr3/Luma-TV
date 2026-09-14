@@ -179,6 +179,8 @@ class StreamRepositoryImpl @Inject constructor(
         videoId: String,
         season: Int?,
         episode: Int?,
+        lookupTitle: String?,
+        lookupYear: Int?,
         forceRefresh: Boolean
     ): Flow<NetworkResult<List<AddonStreams>>> = flow {
         emit(NetworkResult.Loading)
@@ -192,6 +194,38 @@ class StreamRepositoryImpl @Inject constructor(
             // stable URL, so this only fires for Stalker (or a placeholder).
             val streams = item?.let { resolveXtreamPlayStreams(videoId, it) } ?: emptyList()
             emit(NetworkResult.Success(streams))
+            return@flow
+        }
+
+        // A connected Emby server owns movie/series playback regardless of which addon supplied
+        // the catalog. This avoids launching every scraper and addon request on low-power TV boxes.
+        val normalizedType = type.lowercase()
+        val isVideoLibraryType = normalizedType == "movie" || normalizedType == "series" ||
+            normalizedType == "tv" || normalizedType == "show"
+        if (embyStreamSource.hasSession() && isVideoLibraryType) {
+            val groups = embyStreamSource.streamsFor(
+                type = type,
+                videoId = videoId,
+                season = season,
+                episode = episode,
+                lookupTitle = lookupTitle,
+                lookupYear = lookupYear,
+                forceRefresh = forceRefresh,
+            )
+            if (groups.isNotEmpty()) {
+                emit(NetworkResult.Success(groups))
+            } else {
+                emit(
+                    NetworkResult.Error(
+                        context.getString(
+                            R.string.error_stream_tried_none,
+                            embyStreamSource.sourceName,
+                            videoId,
+                            type,
+                        )
+                    )
+                )
+            }
             return@flow
         }
 

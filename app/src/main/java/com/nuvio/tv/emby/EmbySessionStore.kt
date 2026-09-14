@@ -36,6 +36,13 @@ class EmbySessionStore(context: Context) {
         EmbySession(server, userId, decrypt(iv, token), username)
     }.getOrNull()
 
+    /** Cheap routing check that avoids opening Android Keystore just to choose a stream lane. */
+    fun hasSession(): Boolean =
+        prefs.contains("server") &&
+            prefs.contains("user_id") &&
+            prefs.contains("token_iv") &&
+            prefs.contains("token")
+
     fun clear() = prefs.edit().clear().apply()
 
     private fun key(): SecretKey {
